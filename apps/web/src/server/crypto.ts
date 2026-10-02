@@ -4,14 +4,19 @@ import { join } from "node:path";
 import { dataDir } from "@/db";
 
 /**
- * Broker credentials at rest are AES-256-GCM encrypted. The key comes from
- * JOURNAL_SECRET when set; otherwise a random key file is generated next to
- * the database — same trust boundary as the data it protects, so a copied
- * data directory keeps working while a leaked database file alone does not.
+ * Broker credentials at rest are AES-256-GCM encrypted.
+ * On Vercel / production, JOURNAL_SECRET is required (no on-disk `.secret`).
+ * Locally, JOURNAL_SECRET is preferred; otherwise a random key file is generated
+ * next to a local file database — same trust boundary as the data it protects.
  */
 const keyMaterial = (): Buffer => {
   const secret = process.env.JOURNAL_SECRET;
   if (secret && secret.length > 0) return scryptSync(secret, "luxalgo-trade-journal", 32);
+  if (process.env.VERCEL || process.env.NODE_ENV === "production") {
+    throw new Error(
+      "JOURNAL_SECRET is required in production. Set it in the Vercel project environment variables.",
+    );
+  }
   const dir = dataDir();
   const keyPath = join(dir, ".secret");
   if (!existsSync(keyPath)) {

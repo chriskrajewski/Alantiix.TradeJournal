@@ -17,7 +17,7 @@ interface PatchBody {
 
 export const PATCH = handler(async (request: Request, { params }: Params) => {
   const { id } = await params;
-  const account = db.select().from(accounts).where(eq(accounts.id, id)).get();
+  const account = await db.select().from(accounts).where(eq(accounts.id, id)).get();
   if (!account) return bad("Account not found", 404);
 
   const body = (await request.json()) as PatchBody;
@@ -29,39 +29,36 @@ export const PATCH = handler(async (request: Request, { params }: Params) => {
   if (body.autoSync !== undefined) patch.autoSync = body.autoSync;
   if (body.profitCalcMethod !== undefined) patch.profitCalcMethod = body.profitCalcMethod;
 
-  db.transaction(
-    () => {
-      const current = db.select().from(accounts).where(eq(accounts.id, id)).get();
-      requireValue(current, "Account not found.");
-      if (
-        body.broker !== undefined &&
-        body.broker !== current.broker &&
-        isIbkrSyncAccount(current)
-      ) {
-        requireValue(
-          !hasSyncedExecutions(id),
-          "An IBKR account with synced history cannot change brokers. Connect a separate account to preserve its timestamp history.",
-        );
-      }
-      if (Object.keys(patch).length > 0) {
-        db.update(accounts).set(patch).where(eq(accounts.id, id)).run();
-      }
-      // A new profit-calc method changes per-exit attribution — recompute.
-      if (body.profitCalcMethod && body.profitCalcMethod !== current.profitCalcMethod) {
-        rebuildAccount(id);
-      }
-    },
-    { behavior: "immediate" },
-  );
+  await db.transaction(async (tx) => {
+    const current = await tx.select().from(accounts).where(eq(accounts.id, id)).get();
+    requireValue(current, "Account not found.");
+    if (
+      body.broker !== undefined &&
+      body.broker !== current.broker &&
+      isIbkrSyncAccount(current)
+    ) {
+      requireValue(
+        !(await hasSyncedExecutions(id)),
+        "An IBKR account with synced history cannot change brokers. Connect a separate account to preserve its timestamp history.",
+      );
+    }
+    if (Object.keys(patch).length > 0) {
+      await tx.update(accounts).set(patch).where(eq(accounts.id, id)).run();
+    }
+    // A new profit-calc method changes per-exit attribution — recompute.
+    if (body.profitCalcMethod && body.profitCalcMethod !== current.profitCalcMethod) {
+      await rebuildAccount(id, tx);
+    }
+  });
   return ok({ updated: true });
 });
 
 export const DELETE = handler(async (_request: Request, { params }: Params) => {
   const { id } = await params;
-  db.transaction((tx) => {
-    tx.delete(trades).where(eq(trades.accountId, id)).run();
-    tx.delete(executions).where(eq(executions.accountId, id)).run();
-    tx.delete(accounts).where(eq(accounts.id, id)).run();
+  await db.transaction(async (tx) => {
+    await tx.delete(trades).where(eq(trades.accountId, id)).run();
+    await tx.delete(executions).where(eq(executions.accountId, id)).run();
+    await tx.delete(accounts).where(eq(accounts.id, id)).run();
   });
   return ok({ deleted: true });
 });

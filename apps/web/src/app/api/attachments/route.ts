@@ -3,25 +3,25 @@ import { db, attachments, trades, notes, missedTrades, propAccounts, propEntries
 import { handler, ok, requireValue } from "@/server/api";
 import { newId, nowIso } from "@/server/ids";
 import { attachmentMime, MAX_ATTACHMENT_SIZE } from "@/lib/attachment-validation";
-function owner(type: string, id: string) {
+async function owner(type: string, id: string) {
   if (type === "prop-account")
-    return !!db
+    return !!await db
       .select({ id: propAccounts.id })
       .from(propAccounts)
       .where(eq(propAccounts.id, id))
       .get();
   if (type === "prop-entry")
-    return !!db
+    return !!await db
       .select({ id: propEntries.id })
       .from(propEntries)
       .where(eq(propEntries.id, id))
       .get();
   if (type === "trade")
-    return !!db.select({ key: trades.key }).from(trades).where(eq(trades.key, id)).get();
+    return !!await db.select({ key: trades.key }).from(trades).where(eq(trades.key, id)).get();
   if (type === "note")
-    return !!db.select({ id: notes.id }).from(notes).where(eq(notes.id, id)).get();
+    return !!await db.select({ id: notes.id }).from(notes).where(eq(notes.id, id)).get();
   if (type === "missed")
-    return !!db
+    return !!await db
       .select({ id: missedTrades.id })
       .from(missedTrades)
       .where(eq(missedTrades.id, id))
@@ -33,13 +33,13 @@ function owner(type: string, id: string) {
     new Date(id).toISOString().slice(0, 10) === id
   );
 }
-export const GET = handler((request: Request) => {
+export const GET = handler(async (request: Request) => {
   const p = new URL(request.url).searchParams;
   const type = p.get("type") ?? "",
     id = p.get("id") ?? "";
-  requireValue(owner(type, id), "Attachment owner not found.");
+  requireValue(await owner(type, id), "Attachment owner not found.");
   return ok({
-    attachments: db
+    attachments: await db
       .select({
         id: attachments.id,
         name: attachments.name,
@@ -60,7 +60,7 @@ export const POST = handler(async (request: Request) => {
   const type = String(form.get("type") ?? ""),
     ownerId = String(form.get("id") ?? ""),
     file = form.get("file");
-  requireValue(owner(type, ownerId), "Attachment owner not found.");
+  requireValue(await owner(type, ownerId), "Attachment owner not found.");
   requireValue(
     file instanceof File && file.size > 0 && file.size <= MAX_ATTACHMENT_SIZE,
     "Choose a file up to 8 MB.",
@@ -69,7 +69,7 @@ export const POST = handler(async (request: Request) => {
     mime = attachmentMime(bytes);
   requireValue(mime, "Supported files: PNG, JPEG, WebP and PDF.");
   const id = newId();
-  db.insert(attachments)
+  await db.insert(attachments)
     .values({
       id,
       ownerType: type,

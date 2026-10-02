@@ -6,10 +6,10 @@ type Params = { params: Promise<{ id: string }> };
 
 export const PATCH = handler(async (request: Request, { params }: Params) => {
   const { id } = await params;
-  const existing = db.select().from(playbooks).where(eq(playbooks.id, id)).get();
+  const existing = await db.select().from(playbooks).where(eq(playbooks.id, id)).get();
   if (!existing) return bad("Playbook not found", 404);
   const body = (await request.json()) as { name?: string; description?: string; rules?: string[] };
-  db.update(playbooks)
+  await db.update(playbooks)
     .set({
       name: body.name ?? existing.name,
       description: body.description ?? existing.description,
@@ -22,9 +22,9 @@ export const PATCH = handler(async (request: Request, { params }: Params) => {
 
 export const DELETE = handler(async (_request: Request, { params }: Params) => {
   const { id } = await params;
-  db.transaction((tx) => {
-    tx.update(trades).set({ playbookId: null }).where(eq(trades.playbookId, id)).run();
-    tx.delete(playbooks).where(eq(playbooks.id, id)).run();
+  await db.transaction(async (tx) => {
+    await tx.update(trades).set({ playbookId: null }).where(eq(trades.playbookId, id)).run();
+    await tx.delete(playbooks).where(eq(playbooks.id, id)).run();
   });
   return ok({ deleted: true });
 });

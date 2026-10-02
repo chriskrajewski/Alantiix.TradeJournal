@@ -6,7 +6,7 @@ import { join } from "node:path";
 const originalDir = process.env.JOURNAL_DATA_DIR;
 const scratch = mkdtempSync(join(tmpdir(), "journal-ai-test-"));
 process.env.JOURNAL_DATA_DIR = scratch;
-const { db, settings } = await import("../src/db");
+const { db, settings, ensureDb } = await import("../src/db");
 const { getAiKey, getAiModel, getAiProvider, setSetting, getSetting } =
   await import("../src/server/settings");
 const { GET, PATCH } = await import("../src/app/api/settings/route");
@@ -23,8 +23,9 @@ const request = (body: unknown) =>
 const save = (body: unknown) => PATCH(request(body));
 const state = async () => (await GET()).json();
 
-beforeEach(() => {
-  db.delete(settings).run();
+beforeEach(async () => {
+  await ensureDb();
+  await db.delete(settings).run();
   vi.stubEnv("ANTHROPIC_API_KEY", "");
   vi.stubEnv("OPENAI_API_KEY", "");
   vi.stubEnv("JOURNAL_PASSWORD", "");
@@ -35,13 +36,12 @@ beforeEach(() => {
     }),
   );
 });
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
-afterAll(() => {
-  db.$client.close();
+afterAll(async () => {
   if (originalDir === undefined) delete process.env.JOURNAL_DATA_DIR;
   else process.env.JOURNAL_DATA_DIR = originalDir;
   rmSync(scratch, { recursive: true, force: true });
@@ -62,7 +62,7 @@ describe("AI provider settings", () => {
     expect(
       (await save({ anthropicKey: "fixture-anthropic", aiModel: "claude-custom" })).status,
     ).toBe(200);
-    expect(getAiProvider()).toBe("anthropic");
+    expect(await getAiProvider()).toBe("anthropic");
     expect(
       (await save({ aiProvider: "openai", openaiKey: "  fixture-openai  ", aiModel: "gpt-4.1" }))
         .status,
@@ -72,12 +72,12 @@ describe("AI provider settings", () => {
       aiConfigured: true,
       aiModel: "gpt-4.1",
     });
-    expect(getAiKey("anthropic")).toBe("fixture-anthropic");
-    expect(getAiKey("openai")).toBe("fixture-openai");
+    expect(await getAiKey("anthropic")).toBe("fixture-anthropic");
+    expect(await getAiKey("openai")).toBe("fixture-openai");
     await save({ aiProvider: "anthropic" });
-    expect(getAiModel("anthropic")).toBe("claude-custom");
+    expect(await getAiModel("anthropic")).toBe("claude-custom");
     await save({ aiProvider: "openai" });
-    expect(getAiModel("openai")).toBe("gpt-4.1");
+    expect(await getAiModel("openai")).toBe("gpt-4.1");
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -87,13 +87,13 @@ describe("AI provider settings", () => {
       openaiKey: "fixture-private-openai",
       anthropicKey: "fixture-private-anthropic",
     });
-    const rows = JSON.stringify(db.select().from(settings).all());
+    const rows = JSON.stringify(await db.select().from(settings).all());
     expect(rows).not.toContain("fixture-private");
     const exported = await exportData(new Request("http://localhost/api/export"));
     for (const body of [await response.text(), await (await GET()).text(), await exported.text()]) {
       expect(body).not.toContain("fixture-private");
-      expect(body).not.toContain(getSetting("openaiKeyEnc")!);
-      expect(body).not.toContain(getSetting("anthropicKeyEnc")!);
+      expect(body).not.toContain(await getSetting("openaiKeyEnc")!);
+      expect(body).not.toContain(await getSetting("anthropicKeyEnc")!);
     }
   });
 
@@ -104,9 +104,9 @@ describe("AI provider settings", () => {
       anthropicKey: "fixture-anthropic",
     });
     await save({ openaiKey: null });
-    expect(getAiKey("anthropic")).toBe("fixture-anthropic");
-    expect(getAiKey("openai")).toBeNull();
-    expect(aiConfigured()).toBe(false);
+    expect(await getAiKey("anthropic")).toBe("fixture-anthropic");
+    expect(await getAiKey("openai")).toBeNull();
+    expect(await aiConfigured()).toBe(false);
     await expect(runAi("Fixture")).rejects.toThrow("OpenAI API key");
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -119,9 +119,9 @@ describe("AI provider settings", () => {
       aiConnections: { openai: { configured: true, source: "environment" } },
     });
     vi.stubEnv("ANTHROPIC_API_KEY", "fixture-env-anthropic");
-    expect(getAiProvider()).toBe("anthropic");
+    expect(await getAiProvider()).toBe("anthropic");
     await save({ aiProvider: "openai", aiModel: "gpt-4.1" });
-    expect(getAiProvider()).toBe("openai");
+    expect(await getAiProvider()).toBe("openai");
   });
 
   it.each(["openai", "anthropic"] as const)(
@@ -129,7 +129,7 @@ describe("AI provider settings", () => {
     async (provider) => {
       await save({ [`${provider}Key`]: "fixture-saved" });
       vi.stubEnv(provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY", "fixture-env");
-      expect(getAiKey(provider)).toBe("fixture-env");
+      expect(await getAiKey(provider)).toBe("fixture-env");
       for (const key of [null, "fixture-replacement"])
         expect((await save({ [`${provider}Key`]: key })).status).toBe(400);
       expect((await save({ aiProvider: provider, aiModel: "custom-text-model" })).status).toBe(200);
@@ -149,14 +149,14 @@ describe("AI provider settings", () => {
       ]),
     ]) {
       expect((await save({ timeZone: "America/Jamaica", ...invalid })).status).toBe(400);
-      expect(db.select().from(settings).all()).toHaveLength(0);
+      expect(await db.select().from(settings).all()).toHaveLength(0);
     }
     for (const body of [null, [], 42]) expect((await save(body)).status).toBe(400);
   });
 
   it("treats unreadable saved credentials as unconfigured", async () => {
-    setSetting("openaiKeyEnc", "broken-envelope");
-    setSetting("aiProvider", "openai");
+    await setSetting("openaiKeyEnc", "broken-envelope");
+    await setSetting("aiProvider", "openai");
     expect(await state()).toMatchObject({
       aiConfigured: false,
       aiConnections: { openai: { source: null } },
@@ -167,7 +167,7 @@ describe("AI provider settings", () => {
     vi.stubEnv("JOURNAL_PASSWORD", "fixture-password");
     expect((await GET()).status).toBe(401);
     expect((await save({ openaiKey: "fixture-key" })).status).toBe(401);
-    expect(getAiKey("openai")).toBeNull();
+    expect(await getAiKey("openai")).toBeNull();
   });
 });
 

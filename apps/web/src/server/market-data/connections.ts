@@ -33,46 +33,48 @@ const environment = (id: string) => {
   );
   return { managed, values, complete: fields.every((field) => Boolean(values[field.key])) };
 };
-export const connections = (): MarketConnection[] =>
-  providers.map((provider) => {
-    const info = providerInfo(provider.id)!;
-    if (info.mode === "csv") {
-      const configured = csvDatasets().length > 0;
+export const connections = async (): Promise<MarketConnection[]> =>
+  Promise.all(
+    providers.map(async (provider) => {
+      const info = providerInfo(provider.id)!;
+      if (info.mode === "csv") {
+        const configured = (await csvDatasets()).length > 0;
+        return {
+          id: provider.id,
+          name: provider.name,
+          configured,
+          source: configured ? "uploaded" : null,
+        };
+      }
+      if (info.mode === "public") {
+        const configured = (await getSetting(settingKey(provider.id))) === "enabled";
+        return {
+          id: provider.id,
+          name: provider.name,
+          configured,
+          source: configured ? "public" : null,
+        };
+      }
+      const env = environment(provider.id);
+      const source = env.managed
+        ? "environment"
+        : (await getSetting(settingKey(provider.id)))
+          ? "saved"
+          : null;
       return {
         id: provider.id,
         name: provider.name,
-        configured,
-        source: configured ? "uploaded" : null,
+        configured: env.managed ? env.complete : source !== null,
+        source,
       };
-    }
-    if (info.mode === "public") {
-      const configured = getSetting(settingKey(provider.id)) === "enabled";
-      return {
-        id: provider.id,
-        name: provider.name,
-        configured,
-        source: configured ? "public" : null,
-      };
-    }
-    const env = environment(provider.id);
-    const source = env.managed
-      ? "environment"
-      : getSetting(settingKey(provider.id))
-        ? "saved"
-        : null;
-    return {
-      id: provider.id,
-      name: provider.name,
-      configured: env.managed ? env.complete : source !== null,
-      source,
-    };
-  });
-export function connectionKey(id: string): string {
+    }),
+  );
+export async function connectionKey(id: string): Promise<string> {
   providerFor(id);
   const info = providerInfo(id)!;
   if (info.mode === "csv") return "";
   if (info.mode === "public") {
-    if (getSetting(settingKey(id)) !== "enabled")
+    if ((await getSetting(settingKey(id))) !== "enabled")
       throw new MarketDataError("Enable this public market data source in Settings first.");
     return "";
   }
@@ -82,7 +84,7 @@ export function connectionKey(id: string): string {
       throw new MarketDataError("Complete all market data credentials in the server environment.");
     return id === "london-strategic-edge" ? env.values.apiKey! : JSON.stringify(env.values);
   }
-  const saved = getSetting(settingKey(id));
+  const saved = await getSetting(settingKey(id));
   if (!saved) throw new MarketDataError("Add a market data API key in Settings first.");
   try {
     return decryptJson<string>(saved);
@@ -92,7 +94,7 @@ export function connectionKey(id: string): string {
     );
   }
 }
-export function saveConnection(id: string, key: string | null) {
+export async function saveConnection(id: string, key: string | null) {
   providerFor(id);
   const info = providerInfo(id)!;
   if (info.mode === "csv")
@@ -101,8 +103,8 @@ export function saveConnection(id: string, key: string | null) {
     throw new MarketDataError(
       "This connection is managed by the server environment. Update it there.",
     );
-  if (key === null) deleteSetting(settingKey(id));
-  else setSetting(settingKey(id), info.mode === "public" ? "enabled" : encryptJson(key));
+  if (key === null) await deleteSetting(settingKey(id));
+  else await setSetting(settingKey(id), info.mode === "public" ? "enabled" : encryptJson(key));
 }
 export function validateCredentials(id: string, input: unknown): string {
   const info = providerInfo(id)!;

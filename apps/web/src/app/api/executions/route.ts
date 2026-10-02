@@ -39,5 +39,5 @@ export const POST = handler(async (request: Request) => {
     symbol: row.symbol.trim().toUpperCase(),
     fee: row.fee ?? 0,
   }));
-  return ok(insertExecutions(body.accountId, rows, "manual", body.notes));
+  return ok(await insertExecutions(body.accountId, rows, "manual", body.notes));
 });

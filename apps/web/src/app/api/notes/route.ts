@@ -12,8 +12,8 @@ export const GET = handler(async (request: Request) => {
 
   let rows =
     folderId && folderId !== "all"
-      ? db.select().from(notes).where(eq(notes.folderId, folderId)).all()
-      : db.select().from(notes).all();
+      ? await db.select().from(notes).where(eq(notes.folderId, folderId)).all()
+      : await db.select().from(notes).all();
 
   if (search) {
     rows = rows.filter(
@@ -38,7 +38,7 @@ export const GET = handler(async (request: Request) => {
         : b.updatedAt.localeCompare(a.updatedAt),
   );
 
-  const folderRows = db.select().from(folders).orderBy(asc(folders.createdAt)).all();
+  const folderRows = await db.select().from(folders).orderBy(asc(folders.createdAt)).all();
   return ok({ notes: rows, folders: folderRows });
 });
 
@@ -55,7 +55,7 @@ export const POST = handler(async (request: Request) => {
   const body = (await request.json()) as CreateNoteBody;
   const id = newId();
   const now = nowIso();
-  db.insert(notes)
+  await db.insert(notes)
     .values({
       id,
       folderId: body.folderId ?? "my-notes",

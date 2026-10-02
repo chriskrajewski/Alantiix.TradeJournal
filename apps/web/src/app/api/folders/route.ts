@@ -8,6 +8,6 @@ export const POST = handler(async (request: Request) => {
   if (typeof name !== "string" || !name.trim()) return bad("Enter a folder name.");
   if (name.trim().length > 100) return bad("Folder names must be 100 characters or fewer.");
   const id = newId();
-  db.insert(folders).values({ id, name: name.trim(), kind: "user", createdAt: nowIso() }).run();
+  await db.insert(folders).values({ id, name: name.trim(), kind: "user", createdAt: nowIso() }).run();
   return ok({ id });
 });

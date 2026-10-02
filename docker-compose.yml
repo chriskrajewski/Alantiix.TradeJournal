@@ -1,14 +1,4 @@
-services:
-  journal:
-    build: .
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./data:/data
-    environment:
-      # Optional: require a password (recommended when exposed beyond localhost)
-      # JOURNAL_PASSWORD: change-me
-      # Optional: stable encryption secret for broker credentials at rest
-      # JOURNAL_SECRET: change-me-too
-      JOURNAL_DATA_DIR: /data
-    restart: unless-stopped
+# Unsupported: this compose file targeted local SQLite on a volume.
+# Trade Journal on this branch deploys to Vercel with Turso (libSQL).
+# See README.md and .env.example for TURSO_* / JOURNAL_* configuration.
+services: {}

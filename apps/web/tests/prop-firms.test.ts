@@ -16,8 +16,7 @@ const originalDir = process.env.JOURNAL_DATA_DIR;
 const scratch = mkdtempSync(join(tmpdir(), "journal-prop-test-"));
 process.env.JOURNAL_DATA_DIR = scratch;
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
-const {
-  db,
+const { db,
   propAccounts,
   propEntries,
   propReceipts,
@@ -25,8 +24,7 @@ const {
   accounts,
   settings,
   trades,
-  attachments,
-} = await import("../src/db");
+  attachments, ensureDb } = await import("../src/db");
 const { mutateProp, propData, PropConflict } = await import("../src/server/prop-firms");
 const { importPropCsv } = await import("../src/server/prop-csv");
 const { GET, POST } = await import("../src/app/api/prop-firms/route");
@@ -81,8 +79,8 @@ const receipt = (override: Record<string, unknown> = {}) => ({
 });
 const request = (body: unknown) =>
   new Request("http://localhost/api/prop-firms", { method: "POST", body: JSON.stringify(body) });
-const totals = () => {
-  const d = propData();
+const totals = async () => {
+  const d = await propData();
   return cashSummary(cashMovements(d.entries, d.receipts));
 };
 const header = "id,kind,firm,account_id,currency,date,amount,category,expense_id,reference,notes";
@@ -92,27 +90,27 @@ const csv = [
   "rebate,refund,Fixture firm,a,USD,2025-02-01,20,,csv-purchase,,Rebate",
   "reward,payout,Fixture firm,a,USD,2026-01-02,890,,,,Paid",
 ].join("\n");
-beforeEach(() => {
-  db.delete(attachments).run();
-  db.delete(propAudit).run();
-  db.delete(propReceipts).run();
-  db.update(propEntries).set({ parentId: null }).run();
-  db.delete(propEntries).run();
-  db.update(propAccounts).set({ parentId: null }).run();
-  db.delete(propAccounts).run();
-  db.delete(accounts).run();
-  db.delete(settings).run();
+beforeEach(async () => {
+  await ensureDb();
+  await db.delete(attachments).run();
+  await db.delete(propAudit).run();
+  await db.delete(propReceipts).run();
+  await db.update(propEntries).set({ parentId: null }).run();
+  await db.delete(propEntries).run();
+  await db.update(propAccounts).set({ parentId: null }).run();
+  await db.delete(propAccounts).run();
+  await db.delete(accounts).run();
+  await db.delete(settings).run();
   vi.stubEnv("JOURNAL_PASSWORD", "");
 });
-afterEach(() => vi.unstubAllEnvs());
-afterAll(() => {
-  db.$client.close();
+afterEach(async () => vi.unstubAllEnvs());
+afterAll(async () => {
   if (originalDir === undefined) delete process.env.JOURNAL_DATA_DIR;
   else process.env.JOURNAL_DATA_DIR = originalDir;
   rmSync(scratch, { recursive: true, force: true });
 });
 describe("prop cash arithmetic", () => {
-  it("keeps currency precision and refuses silent rounding, unsafe amounts and mixed currencies", () => {
+  it("keeps currency precision and refuses silent rounding, unsafe amounts and mixed currencies", async () => {
     expect(toMinor("0.29", "USD")).toBe(29);
     expect(toMinor("101", "JPY")).toBe(101);
     expect(toMinor("1.234", "KWD")).toBe(1234);
@@ -121,15 +119,15 @@ describe("prop cash arithmetic", () => {
     expect(() => toMinor("1.0", "JPY")).toThrow();
     expect(() => toMinor("1", "BAD")).toThrow();
     expect(expectedPayout({ amountMinor: 101, splitBps: 5000, feeMinor: 1 } as PropEntry)).toBe(50);
-    mutateProp(account());
-    mutateProp(entry());
-    mutateProp(entry({ id: "eur", accountId: null, currency: "EUR" }));
-    expect(totals).toThrow("one currency");
+    await mutateProp(account());
+    await mutateProp(entry());
+    await mutateProp(entry({ id: "eur", accountId: null, currency: "EUR" }));
+    await expect(totals()).rejects.toThrow("one currency");
   });
-  it("uses settlement dates, refunds and net reversals, with pending requests excluded from cash", () => {
-    mutateProp(account());
-    mutateProp(entry());
-    mutateProp(
+  it("uses settlement dates, refunds and net reversals, with pending requests excluded from cash", async () => {
+    await mutateProp(account());
+    await mutateProp(entry());
+    await mutateProp(
       entry({
         id: "refund",
         kind: "refund",
@@ -138,22 +136,22 @@ describe("prop cash arithmetic", () => {
         occurredOn: "2025-02-01",
       }),
     );
-    mutateProp(payout());
-    expect(totals()).toMatchObject({
+    await mutateProp(payout());
+    expect(await totals()).toMatchObject({
       spent: 10000,
       refunds: 2000,
       received: 0,
       net: -8000,
       roi: -1,
     });
-    mutateProp(receipt());
-    mutateProp(receipt({ id: "r2", revision: 2, amount: "490", occurredOn: "2026-01-03" }));
-    mutateProp(
+    await mutateProp(receipt());
+    await mutateProp(receipt({ id: "r2", revision: 2, amount: "490", occurredOn: "2026-01-03" }));
+    await mutateProp(
       receipt({ id: "rev", revision: 3, kind: "reversal", amount: "90", occurredOn: "2026-02-01" }),
     );
-    const d = propData(),
+    const d = await propData(),
       flows = cashMovements(d.entries, d.receipts);
-    expect(totals()).toMatchObject({ received: 80000, net: 72000, roi: 9 });
+    expect(await totals()).toMatchObject({ received: 80000, net: 72000, roi: 9 });
     expect(cashSummary(flows.filter((r) => r.date < "2026"))).toMatchObject({
       received: 0,
       net: -8000,
@@ -167,13 +165,13 @@ describe("prop cash arithmetic", () => {
       overdue: true,
     });
   });
-  it("leaves zero-spend ROI unavailable and distinguishes completed variance from money still due", () => {
-    mutateProp(account());
-    mutateProp(payout());
-    mutateProp(receipt({ amount: "880" }));
-    mutateProp(payout({ revision: 2, status: "completed", reason: "Final bank confirmation" }));
-    const d = propData();
-    expect(totals().roi).toBeNull();
+  it("leaves zero-spend ROI unavailable and distinguishes completed variance from money still due", async () => {
+    await mutateProp(account());
+    await mutateProp(payout());
+    await mutateProp(receipt({ amount: "880" }));
+    await mutateProp(payout({ revision: 2, status: "completed", reason: "Final bank confirmation" }));
+    const d = await propData();
+    expect((await totals()).roi).toBeNull();
     expect(payoutProgress(d.entries, d.receipts, d.today)[0]).toMatchObject({
       actual: 88000,
       remaining: 0,
@@ -190,7 +188,7 @@ describe("prop account lifecycle and corrections", () => {
       expect(
         (await (await GET(new Request("http://localhost/api/prop-firms"))).json()).accounts,
       ).toEqual([]);
-      db.insert(accounts)
+      await db.insert(accounts)
         .values({
           id: "journal",
           name: "Journal",
@@ -199,33 +197,32 @@ describe("prop account lifecycle and corrections", () => {
           credentialsEnc: "hidden-fixture",
         })
         .run();
-      const before = db.select().from(trades).all();
-      mutateProp(account({ journalAccountId: "journal", size: "50000" }));
-      expect(db.select().from(trades).all()).toEqual(before);
+      const before = await db.select().from(trades).all();
+      await mutateProp(account({ journalAccountId: "journal", size: "50000" }));
+      expect(await db.select().from(trades).all()).toEqual(before);
       expect(fetcher).not.toHaveBeenCalled();
-      db.delete(accounts).where(eq(accounts.id, "journal")).run();
-      expect(propData().accounts[0]?.journalAccountId).toBeNull();
+      await db.delete(accounts).where(eq(accounts.id, "journal")).run();
+      expect((await propData()).accounts[0]?.journalAccountId).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
   });
-  it("preserves prior attempts and archived expenses in results; rejects invalid lineage", () => {
-    mutateProp(account({ program: "evaluation", status: "breached", closedOn: "2025-02-01" }));
-    mutateProp(entry());
-    mutateProp(
+  it("preserves prior attempts and archived expenses in results; rejects invalid lineage", async () => {
+    await mutateProp(account({ program: "evaluation", status: "breached", closedOn: "2025-02-01" }));
+    await mutateProp(entry());
+    await mutateProp(
       account({ id: "reset", parentId: "a", program: "evaluation", openedOn: "2025-02-02" }),
     );
-    mutateProp({
+    await mutateProp({
       action: "account.archive",
       id: "a",
       revision: 1,
       archived: true,
       reason: "Keep previous attempt",
     });
-    expect(totals().spent).toBe(10000);
-    expect(propData().accounts).toHaveLength(2);
-    expect(() =>
-      mutateProp(
+    expect((await totals()).spent).toBe(10000);
+    expect((await propData()).accounts).toHaveLength(2);
+    await expect(mutateProp(
         account({
           revision: 2,
           parentId: "reset",
@@ -233,28 +230,21 @@ describe("prop account lifecycle and corrections", () => {
           openedOn: "2025-03-01",
           reason: "Cycle",
         }),
-      ),
-    ).toThrow();
-    expect(() =>
-      mutateProp(account({ id: "bad", parentId: "reset", firm: "Different" })),
-    ).toThrow();
-    expect(() =>
-      mutateProp(
+      )).rejects.toThrow();
+    await expect(mutateProp(account({ id: "bad", parentId: "reset", firm: "Different" }))).rejects.toThrow();
+    await expect(mutateProp(
         account({ id: "reset", revision: 1, parentId: "a", firm: "Different", reason: "Rename" }),
-      ),
-    ).toThrow();
-    expect(() =>
-      mutateProp(account({ revision: 2, program: "funded", reason: "Overwrite phase" })),
-    ).toThrow();
+      )).rejects.toThrow();
+    await expect(mutateProp(account({ revision: 2, program: "funded", reason: "Overwrite phase" }))).rejects.toThrow();
   });
-  it("protects children when an account without transactions is edited", () => {
-    mutateProp(account());
-    mutateProp(account({ id: "b", parentId: "a" }));
-    expect(() => mutateProp(account({ revision: 1, firm: "Changed", reason: "Rename" }))).toThrow(
+  it("protects children when an account without transactions is edited", async () => {
+    await mutateProp(account());
+    await mutateProp(account({ id: "b", parentId: "a" }));
+    await expect(mutateProp(account({ revision: 1, firm: "Changed", reason: "Rename" }))).rejects.toThrow(
       "linked phase",
     );
   });
-  it("rejects incomplete, future and impossible dates and invalid funded status", () => {
+  it("rejects incomplete, future and impossible dates and invalid funded status", async () => {
     for (const override of [
       { openedOn: "2025-02-30" },
       { openedOn: "2999-01-01" },
@@ -262,74 +252,61 @@ describe("prop account lifecycle and corrections", () => {
       { status: "passed", closedOn: "2025-02-01" },
       { renewalOn: "2026-10-01" },
     ])
-      expect(() => mutateProp(account(override))).toThrow();
-    mutateProp(account({ program: "evaluation" }));
-    expect(() => mutateProp(payout())).toThrow("funded");
+      await expect(mutateProp(account(override))).rejects.toThrow();
+    await mutateProp(account({ program: "evaluation" }));
+    await expect(mutateProp(payout())).rejects.toThrow("funded");
   });
-  it("requires correction reasons and optimistic revisions, while retries of new records are idempotent", () => {
-    mutateProp(account());
-    mutateProp(account());
-    mutateProp(entry());
-    mutateProp(entry());
-    expect(propData().accounts).toHaveLength(1);
-    expect(propData().entries).toHaveLength(1);
-    const auditBefore = db.select().from(propAudit).all().length;
-    expect(() => mutateProp(entry({ revision: 1, amount: "120" }))).toThrow("reason");
-    expect(totals().spent).toBe(10000);
-    expect(db.select().from(propAudit).all()).toHaveLength(auditBefore);
-    mutateProp(entry({ revision: 1, amount: "120", reason: "Correct invoice" }));
-    expect(() => mutateProp(entry({ revision: 1, amount: "150", reason: "Stale edit" }))).toThrow(
+  it("requires correction reasons and optimistic revisions, while retries of new records are idempotent", async () => {
+    await mutateProp(account());
+    await mutateProp(account());
+    await mutateProp(entry());
+    await mutateProp(entry());
+    expect((await propData()).accounts).toHaveLength(1);
+    expect((await propData()).entries).toHaveLength(1);
+    const auditBefore = (await db.select().from(propAudit).all()).length;
+    await expect(mutateProp(entry({ revision: 1, amount: "120" }))).rejects.toThrow("reason");
+    expect((await totals()).spent).toBe(10000);
+    expect(await db.select().from(propAudit).all()).toHaveLength(auditBefore);
+    await mutateProp(entry({ revision: 1, amount: "120", reason: "Correct invoice" }));
+    await expect(mutateProp(entry({ revision: 1, amount: "150", reason: "Stale edit" }))).rejects.toThrow(
       PropConflict,
     );
-    expect(totals().spent).toBe(12000);
+    expect((await totals()).spent).toBe(12000);
   });
-  it("enforces refund caps, chronology, and dependencies on void and restore", () => {
-    mutateProp(account());
-    mutateProp(entry());
-    mutateProp(
+  it("enforces refund caps, chronology, and dependencies on void and restore", async () => {
+    await mutateProp(account());
+    await mutateProp(entry());
+    await mutateProp(
       entry({ id: "f", kind: "refund", parentId: "e", amount: "80", occurredOn: "2025-02-01" }),
     );
-    expect(() =>
-      mutateProp(
+    await expect(mutateProp(
         entry({ id: "f2", kind: "refund", parentId: "e", amount: "21", occurredOn: "2025-02-01" }),
-      ),
-    ).toThrow("exceed");
-    expect(() =>
-      mutateProp(entry({ revision: 1, amount: "70", reason: "Correct invoice" })),
-    ).toThrow("refunds");
-    expect(() =>
-      mutateProp({ action: "entry.void", id: "e", revision: 1, voided: true, reason: "Incorrect" }),
-    ).toThrow("refunds");
-    mutateProp({ action: "entry.void", id: "f", revision: 1, voided: true, reason: "Incorrect" });
-    mutateProp(entry({ revision: 1, occurredOn: "2025-03-01", reason: "Correct date" }));
-    expect(() =>
-      mutateProp({ action: "entry.void", id: "f", revision: 2, voided: false, reason: "Restore" }),
-    ).toThrow();
-    mutateProp({ action: "entry.void", id: "e", revision: 2, voided: true, reason: "Duplicate" });
-    expect(totals().spent).toBe(0);
+      )).rejects.toThrow("exceed");
+    await expect(mutateProp(entry({ revision: 1, amount: "70", reason: "Correct invoice" }))).rejects.toThrow("refunds");
+    await expect(mutateProp({ action: "entry.void", id: "e", revision: 1, voided: true, reason: "Incorrect" })).rejects.toThrow("refunds");
+    await mutateProp({ action: "entry.void", id: "f", revision: 1, voided: true, reason: "Incorrect" });
+    await mutateProp(entry({ revision: 1, occurredOn: "2025-03-01", reason: "Correct date" }));
+    await expect(mutateProp({ action: "entry.void", id: "f", revision: 2, voided: false, reason: "Restore" })).rejects.toThrow();
+    await mutateProp({ action: "entry.void", id: "e", revision: 2, voided: true, reason: "Duplicate" });
+    expect((await totals()).spent).toBe(0);
   });
 });
 describe("payout receipt integrity", () => {
-  beforeEach(() => {
-    mutateProp(account());
-    mutateProp(payout());
+  beforeEach(async () => {
+    await mutateProp(account());
+    await mutateProp(payout());
   });
-  it("rejects fees above share, completion without cash, and cancellations of received cash", () => {
-    expect(() => mutateProp(payout({ revision: 1, fee: "901", reason: "Fee" }))).toThrow("fees");
-    expect(() => mutateProp(payout({ revision: 1, status: "completed", reason: "Done" }))).toThrow(
+  it("rejects fees above share, completion without cash, and cancellations of received cash", async () => {
+    await expect(mutateProp(payout({ revision: 1, fee: "901", reason: "Fee" }))).rejects.toThrow("fees");
+    await expect(mutateProp(payout({ revision: 1, status: "completed", reason: "Done" }))).rejects.toThrow(
       "received",
     );
-    mutateProp(receipt());
-    mutateProp(receipt());
-    expect(propData().receipts).toHaveLength(1);
-    expect(() =>
-      mutateProp(payout({ revision: 2, status: "cancelled", reason: "Cancel" })),
-    ).toThrow("reversal");
-    expect(() =>
-      mutateProp(receipt({ id: "over", revision: 2, kind: "reversal", amount: "401" })),
-    ).toThrow("exceed");
-    expect(() =>
-      mutateProp(
+    await mutateProp(receipt());
+    await mutateProp(receipt());
+    expect((await propData()).receipts).toHaveLength(1);
+    await expect(mutateProp(payout({ revision: 2, status: "cancelled", reason: "Cancel" }))).rejects.toThrow("reversal");
+    await expect(mutateProp(receipt({ id: "over", revision: 2, kind: "reversal", amount: "401" }))).rejects.toThrow("exceed");
+    await expect(mutateProp(
         receipt({
           id: "early",
           revision: 2,
@@ -337,23 +314,20 @@ describe("payout receipt integrity", () => {
           amount: "1",
           occurredOn: "2025-12-31",
         }),
-      ),
-    ).toThrow("exceed");
+      )).rejects.toThrow("exceed");
   });
-  it("prevents a receipt correction from creating a negative historical cash balance", () => {
-    mutateProp(receipt());
-    mutateProp(receipt({ id: "rev", revision: 2, kind: "reversal", amount: "100" }));
-    expect(() =>
-      mutateProp({
+  it("prevents a receipt correction from creating a negative historical cash balance", async () => {
+    await mutateProp(receipt());
+    await mutateProp(receipt({ id: "rev", revision: 2, kind: "reversal", amount: "100" }));
+    await expect(mutateProp({
         action: "receipt.void",
         id: "r",
         payoutId: "p",
         revision: 3,
         voided: true,
         reason: "Wrong amount",
-      }),
-    ).toThrow("exceed");
-    mutateProp({
+      })).rejects.toThrow("exceed");
+    await mutateProp({
       action: "receipt.void",
       id: "rev",
       payoutId: "p",
@@ -361,7 +335,7 @@ describe("payout receipt integrity", () => {
       voided: true,
       reason: "Reverse correction first",
     });
-    mutateProp({
+    await mutateProp({
       action: "receipt.void",
       id: "r",
       payoutId: "p",
@@ -369,78 +343,72 @@ describe("payout receipt integrity", () => {
       voided: true,
       reason: "Wrong amount",
     });
-    expect(totals().received).toBe(0);
-    mutateProp(payout({ revision: 5, status: "cancelled", reason: "Cancelled request" }));
-    expect(() =>
-      mutateProp({
+    expect((await totals()).received).toBe(0);
+    await mutateProp(payout({ revision: 5, status: "cancelled", reason: "Cancelled request" }));
+    await expect(mutateProp({
         action: "receipt.void",
         id: "r",
         payoutId: "p",
         revision: 6,
         voided: false,
         reason: "Restore",
-      }),
-    ).toThrow("Reopen");
+      })).rejects.toThrow("Reopen");
   });
-  it("voids an entire duplicate payout without deleting receipts, and supports restoration", () => {
-    mutateProp(receipt());
-    mutateProp({ action: "entry.void", id: "p", revision: 2, voided: true, reason: "Duplicate" });
-    expect(totals().received).toBe(0);
-    expect(propData().receipts).toHaveLength(1);
-    mutateProp({
+  it("voids an entire duplicate payout without deleting receipts, and supports restoration", async () => {
+    await mutateProp(receipt());
+    await mutateProp({ action: "entry.void", id: "p", revision: 2, voided: true, reason: "Duplicate" });
+    expect((await totals()).received).toBe(0);
+    expect((await propData()).receipts).toHaveLength(1);
+    await mutateProp({
       action: "entry.void",
       id: "p",
       revision: 3,
       voided: false,
       reason: "Verified unique",
     });
-    expect(totals().received).toBe(40000);
+    expect((await totals()).received).toBe(40000);
   });
-  it("reopens completed payouts after a full reversal", () => {
-    mutateProp(receipt());
-    mutateProp(payout({ revision: 2, status: "completed", reason: "Settled" }));
-    mutateProp(receipt({ id: "rev", revision: 3, kind: "reversal", amount: "400" }));
-    expect(propData().entries[0]?.status).toBe("approved");
-    expect(totals().received).toBe(0);
+  it("reopens completed payouts after a full reversal", async () => {
+    await mutateProp(receipt());
+    await mutateProp(payout({ revision: 2, status: "completed", reason: "Settled" }));
+    await mutateProp(receipt({ id: "rev", revision: 3, kind: "reversal", amount: "400" }));
+    expect((await propData()).entries[0]?.status).toBe("approved");
+    expect((await totals()).received).toBe(0);
   });
 });
 describe("generic cash imports and API boundaries", () => {
-  it("previews without persistent writes, imports all rows atomically and deduplicates repeat files", () => {
-    mutateProp(account());
-    const before = db.select().from(propAudit).all();
-    expect(importPropCsv(csv, true)).toMatchObject({ imported: 3, skipped: 0 });
-    expect(propData().entries).toEqual([]);
-    expect(propData().receipts).toEqual([]);
-    expect(db.select().from(propAudit).all()).toEqual(before);
-    expect(importPropCsv(csv, false)).toMatchObject({ imported: 3 });
-    expect(totals()).toMatchObject({ spent: 10000, refunds: 2000, received: 89000, net: 81000 });
-    expect(importPropCsv(csv, false)).toMatchObject({ imported: 0, skipped: 3 });
-    expect(() => importPropCsv(csv.replace(",100,evaluation", ",200,evaluation"), false)).toThrow(
+  it("previews without persistent writes, imports all rows atomically and deduplicates repeat files", async () => {
+    await mutateProp(account());
+    const before = await db.select().from(propAudit).all();
+    expect(await importPropCsv(csv, true)).toMatchObject({ imported: 3, skipped: 0 });
+    expect((await propData()).entries).toEqual([]);
+    expect((await propData()).receipts).toEqual([]);
+    expect(await db.select().from(propAudit).all()).toEqual(before);
+    expect(await importPropCsv(csv, false)).toMatchObject({ imported: 3 });
+    expect(await totals()).toMatchObject({ spent: 10000, refunds: 2000, received: 89000, net: 81000 });
+    expect(await importPropCsv(csv, false)).toMatchObject({ imported: 0, skipped: 3 });
+    await expect(importPropCsv(csv.replace(",100,evaluation", ",200,evaluation"), false)).rejects.toThrow(
       "different data",
     );
-    expect(totals().spent).toBe(10000);
+    expect((await totals()).spent).toBe(10000);
   });
-  it("rolls back a whole invalid batch, rejects repeated IDs, and requires funded account mapping", () => {
-    mutateProp(account());
-    expect(() =>
-      importPropCsv(csv.replace(",20,,csv-purchase", ",200,,csv-purchase"), false),
-    ).toThrow("Row 3");
-    expect(propData().entries).toEqual([]);
-    expect(() => importPropCsv(csv.replace("rebate,refund", "csv-purchase,refund"), false)).toThrow(
+  it("rolls back a whole invalid batch, rejects repeated IDs, and requires funded account mapping", async () => {
+    await mutateProp(account());
+    await expect(importPropCsv(csv.replace(",20,,csv-purchase", ",200,,csv-purchase"), false)).rejects.toThrow("Row 3");
+    expect((await propData()).entries).toEqual([]);
+    await expect(importPropCsv(csv.replace("rebate,refund", "csv-purchase,refund"), false)).rejects.toThrow(
       "unique",
     );
-    expect(() =>
-      importPropCsv(
+    await expect(importPropCsv(
         csv.replace("reward,payout,Fixture firm,a,", "reward,payout,Fixture firm,,"),
         false,
-      ),
-    ).toThrow("funded");
-    expect(propData().entries).toEqual([]);
+      )).rejects.toThrow("funded");
+    expect((await propData()).entries).toEqual([]);
   });
   it("attaches evidence only to existing prop accounts or ledger entries", async () => {
     const { POST: attach, GET: list } = await import("../src/app/api/attachments/route");
-    mutateProp(account());
-    mutateProp(entry());
+    await mutateProp(account());
+    await mutateProp(entry());
     for (const [type, id] of [
       ["prop-account", "a"],
       ["prop-entry", "e"],
@@ -465,7 +433,7 @@ describe("generic cash imports and API boundaries", () => {
     expect(result.attachments[0]).toMatchObject({ name: "receipt.pdf", mime: "application/pdf" });
   });
   it("exports complete histories but excludes credentials", async () => {
-    db.insert(accounts)
+    await db.insert(accounts)
       .values({
         id: "j",
         name: "Journal",
@@ -474,8 +442,8 @@ describe("generic cash imports and API boundaries", () => {
         createdAt: "2025-01-01",
       })
       .run();
-    mutateProp(account());
-    importPropCsv(csv, false);
+    await mutateProp(account());
+    await importPropCsv(csv, false);
     const result = await (await exportData(new Request("http://localhost/api/export"))).json();
     expect(result.propAccounts).toHaveLength(1);
     expect(result.propEntries).toHaveLength(3);

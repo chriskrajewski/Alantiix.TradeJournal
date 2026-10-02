@@ -30,7 +30,7 @@
     "@radix-ui/react-tooltip": "^1.2.16",
     "@tanstack/react-table": "^9.1.2",
     "ai": "^7.0.77",
-    "better-sqlite3": "^12.2.0",
+    "@libsql/client": "^0.15.15",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
@@ -48,7 +48,6 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",

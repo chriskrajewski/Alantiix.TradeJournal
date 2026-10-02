@@ -14,10 +14,10 @@ interface PatchNoteBody {
 
 export const PATCH = handler(async (request: Request, { params }: Params) => {
   const { id } = await params;
-  const existing = db.select().from(notes).where(eq(notes.id, id)).get();
+  const existing = await db.select().from(notes).where(eq(notes.id, id)).get();
   if (!existing) return bad("Note not found", 404);
   const body = (await request.json()) as PatchNoteBody;
-  db.update(notes)
+  await db.update(notes)
     .set({
       title: body.title ?? existing.title,
       content: body.content ?? existing.content,
@@ -32,6 +32,6 @@ export const PATCH = handler(async (request: Request, { params }: Params) => {
 
 export const DELETE = handler(async (_request: Request, { params }: Params) => {
   const { id } = await params;
-  db.delete(notes).where(eq(notes.id, id)).run();
+  await db.delete(notes).where(eq(notes.id, id)).run();
   return ok({ deleted: true });
 });

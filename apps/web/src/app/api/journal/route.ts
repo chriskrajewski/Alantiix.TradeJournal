@@ -12,11 +12,11 @@ import { queryTrades } from "@/server/trades-query";
  */
 export const GET = handler(async (request: Request) => {
   const url = new URL(request.url);
-  const timeZone = getTimeZone();
-  const { trades } = queryTrades(readFilters(url.searchParams));
+  const timeZone = await getTimeZone();
+  const { trades } = await queryTrades(readFilters(url.searchParams));
 
   const tradeDays = new Map(dailyStats(trades, timeZone).map((day) => [day.date, day]));
-  const noteRows = db.select().from(journalDays).orderBy(desc(journalDays.date)).all();
+  const noteRows = await db.select().from(journalDays).orderBy(desc(journalDays.date)).all();
   const noteDays = new Map(noteRows.map((row) => [row.date, row]));
 
   const filters = readFilters(url.searchParams);

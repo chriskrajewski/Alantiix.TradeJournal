@@ -9,7 +9,7 @@ const scratch = mkdtempSync(join(tmpdir(), "journal-timezone-"));
 vi.stubEnv("JOURNAL_DATA_DIR", scratch);
 vi.stubEnv("JOURNAL_PASSWORD", "");
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
-const { db, accounts, executions, trades, settings } = await import("../src/db");
+const { db, accounts, executions, trades, settings, ensureDb } = await import("../src/db");
 const { setSetting, getTimeZone, getImportTimeZone } = await import("../src/server/settings");
 const { POST: importFile } = await import("../src/app/api/import/route");
 const { GET: getSettings, PATCH: patchSettings } = await import("../src/app/api/settings/route");
@@ -36,32 +36,32 @@ const post = async (body: object) => {
   return result;
 };
 
-beforeEach(() => {
-  db.delete(trades).run();
-  db.delete(executions).run();
-  db.delete(settings).run();
-  db.delete(accounts).run();
-  db.insert(accounts)
+beforeEach(async () => {
+  await ensureDb();
+  await db.delete(trades).run();
+  await db.delete(executions).run();
+  await db.delete(settings).run();
+  await db.delete(accounts).run();
+  await db.insert(accounts)
     .values({ id: "test", name: "Timezone test", kind: "import", createdAt: "2026-01-01" })
     .run();
 });
-afterEach(() => vi.useRealTimers());
-afterAll(() => {
-  db.$client.close();
+afterEach(async () => vi.useRealTimers());
+afterAll(async () => {
   vi.unstubAllEnvs();
   rmSync(scratch, { recursive: true, force: true });
 });
 
 describe("statement and display timezones are independent", () => {
   it("preserves legacy import behavior when only the display timezone changes", async () => {
-    expect(getImportTimeZone()).toBe("UTC");
-    setSetting("timeZone", "Europe/Helsinki");
-    expect(getImportTimeZone()).toBe("Europe/Helsinki");
-    expect((await save({ timeZone: "America/Asuncion" })).status).toBe(200);
-    expect(getImportTimeZone()).toBe("Europe/Helsinki");
-    expect(getTimeZone()).toBe("America/Asuncion");
+    expect(await getImportTimeZone()).toBe("UTC");
+    await setSetting("timeZone", "Europe/Helsinki");
+    expect(await getImportTimeZone()).toBe("Europe/Helsinki");
+    expect((await save({ timeZone: "America/Argentina/Buenos_Aires" })).status).toBe(200);
+    expect(await getImportTimeZone()).toBe("Europe/Helsinki");
+    expect(await getTimeZone()).toBe("America/Argentina/Buenos_Aires");
     await save({ timeZone: "America/New_York" });
-    expect(getImportTimeZone()).toBe("Europe/Helsinki");
+    expect(await getImportTimeZone()).toBe("Europe/Helsinki");
   });
 
   it.each([
@@ -70,7 +70,7 @@ describe("statement and display timezones are independent", () => {
   ])(
     "imports broker wall-clock time correctly in %s and deduplicates the same file",
     async (date, expected) => {
-      await save({ timeZone: "America/Asuncion", importTimeZone: "Europe/Helsinki" });
+      await save({ timeZone: "America/Argentina/Buenos_Aires", importTimeZone: "Europe/Helsinki" });
       const content = html.replaceAll("2026.07.05", date);
       const preview = await post({ mode: "preview", content });
       expect(preview).toMatchObject({
@@ -78,13 +78,13 @@ describe("statement and display timezones are independent", () => {
         timeZone: "Europe/Helsinki",
       });
       expect(preview.executions[0].executedAt).toBe(expected);
-      expect(db.select().from(executions).all()).toHaveLength(0);
+      expect(await db.select().from(executions).all()).toHaveLength(0);
       await post({ mode: "commit", accountId: "test", content });
       expect(
-        db
+        (await db
           .select()
           .from(executions)
-          .all()
+          .all())
           .map((row) => row.executedAt),
       ).toContain(expected);
       expect(await post({ mode: "commit", accountId: "test", content })).toMatchObject({
@@ -95,24 +95,24 @@ describe("statement and display timezones are independent", () => {
   );
 
   it("uses a per-file override in both preview and commit without changing defaults", async () => {
-    await save({ timeZone: "America/Asuncion", importTimeZone: "UTC" });
+    await save({ timeZone: "America/Argentina/Buenos_Aires", importTimeZone: "UTC" });
     const preview = await post({ mode: "preview", content: html, timeZone: "Europe/Helsinki" });
     // The UI sends the preview's zone even if the saved default changes before commit.
     await save({ importTimeZone: "America/New_York" });
     await post({ mode: "commit", accountId: "test", content: html, timeZone: preview.timeZone });
     expect(
-      db
+      (await db
         .select()
         .from(executions)
-        .all()
+        .all())
         .map((row) => row.executedAt),
     ).toContain("2026-07-05T01:00:00.000Z");
-    expect(getImportTimeZone()).toBe("America/New_York");
-    expect(getTimeZone()).toBe("America/Asuncion");
+    expect(await getImportTimeZone()).toBe("America/New_York");
+    expect(await getTimeZone()).toBe("America/Argentina/Buenos_Aires");
   });
 
   it("applies the statement timezone to column-mapped CSV files too", async () => {
-    await save({ timeZone: "America/Asuncion", importTimeZone: "Europe/Helsinki" });
+    await save({ timeZone: "America/Argentina/Buenos_Aires", importTimeZone: "Europe/Helsinki" });
     const body = {
       content: "Ticker,Action,Units,Cost,When\nEURUSD,buy,1,1.1,2026-07-05 04:00",
       mapping: {
@@ -126,11 +126,11 @@ describe("statement and display timezones are independent", () => {
     const preview = await post({ ...body, mode: "preview" });
     expect(preview.executions[0].executedAt).toBe("2026-07-05T01:00:00.000Z");
     await post({ ...body, mode: "commit", accountId: "test" });
-    expect(db.select().from(executions).get()?.executedAt).toBe("2026-07-05T01:00:00.000Z");
+    expect((await db.select().from(executions).get())?.executedAt).toBe("2026-07-05T01:00:00.000Z");
   });
 
   it("honors explicit UTC offsets regardless of the statement timezone", async () => {
-    await save({ importTimeZone: "America/Asuncion" });
+    await save({ importTimeZone: "America/Argentina/Buenos_Aires" });
     const content = html
       .replaceAll("2026.07.05 04:00", "2026-07-05T04:00:00+03:00")
       .replaceAll("2026.07.05 04:30", "2026-07-05T04:30:00+03:00");
@@ -141,13 +141,13 @@ describe("statement and display timezones are independent", () => {
   it.each(["Mars/Olympus", "", null, 42, {}])(
     "rejects invalid zone %j before any setting or execution write",
     async (invalid) => {
-      setSetting("timeZone", "Europe/Helsinki");
-      expect((await save({ timeZone: "America/Asuncion", importTimeZone: invalid })).status).toBe(
+      await setSetting("timeZone", "Europe/Helsinki");
+      expect((await save({ timeZone: "America/Argentina/Buenos_Aires", importTimeZone: invalid })).status).toBe(
         400,
       );
       expect((await save({ timeZone: invalid, importTimeZone: "UTC" })).status).toBe(400);
-      expect(getTimeZone()).toBe("Europe/Helsinki");
-      expect(getImportTimeZone()).toBe("Europe/Helsinki");
+      expect(await getTimeZone()).toBe("Europe/Helsinki");
+      expect(await getImportTimeZone()).toBe("Europe/Helsinki");
       for (const mode of ["preview", "commit"])
         expect(
           (
@@ -156,14 +156,14 @@ describe("statement and display timezones are independent", () => {
             )
           ).status,
         ).toBe(400);
-      expect(db.select().from(executions).all()).toHaveLength(0);
+      expect(await db.select().from(executions).all()).toHaveLength(0);
     },
   );
 
   it("aligns trade dates, execution times, analytics and journal/calendar days across midnight", async () => {
-    await save({ timeZone: "America/Asuncion", importTimeZone: "Europe/Helsinki" });
+    await save({ timeZone: "America/Argentina/Buenos_Aires", importTimeZone: "Europe/Helsinki" });
     await post({ mode: "commit", accountId: "test", content: html });
-    const stored = db.select().from(trades).get()!;
+    const stored = (await db.select().from(trades).get())!;
     const dashboard = await (await stats(request("stats?calYear=2026&calMonth=7"))).json();
     expect(dashboard.days[0].date).toBe("2026-07-04");
     expect(dashboard.buckets.hour.find((bucket: { trades: number }) => bucket.trades > 0).key).toBe(
@@ -189,12 +189,12 @@ describe("statement and display timezones are independent", () => {
     expect(dayKeyOf(listed.trades[0].closedAt, listed.timeZone)).toBe("2026-07-04");
     expect(dayKeyOf(dashboard.recentTrades[0].closedAt, dashboard.timeZone)).toBe("2026-07-04");
     await save({ timeZone: "Europe/Helsinki", importTimeZone: "UTC" });
-    expect(db.select().from(trades).get()?.closedAt).toBe(stored.closedAt);
+    expect((await db.select().from(trades).get())?.closedAt).toBe(stored.closedAt);
     expect((await (await journal(request("journal"))).json()).days[0].date).toBe("2026-07-05");
   });
 
   it("uses the journal's current month at the UTC month boundary", async () => {
-    await save({ timeZone: "America/Asuncion" });
+    await save({ timeZone: "America/Argentina/Buenos_Aires" });
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-08-01T01:00:00Z"));
     const result = await (await stats(request("stats"))).json();
@@ -202,23 +202,23 @@ describe("statement and display timezones are independent", () => {
   });
 
   it("returns and backs up both timezone settings", async () => {
-    await save({ timeZone: "America/Asuncion", importTimeZone: "Europe/Helsinki" });
+    await save({ timeZone: "America/Argentina/Buenos_Aires", importTimeZone: "Europe/Helsinki" });
     expect(await (await getSettings()).json()).toMatchObject({
-      timeZone: "America/Asuncion",
+      timeZone: "America/Argentina/Buenos_Aires",
       importTimeZone: "Europe/Helsinki",
     });
     expect((await (await exportData(request("export"))).json()).settings).toMatchObject({
-      timeZone: "America/Asuncion",
+      timeZone: "America/Argentina/Buenos_Aires",
       importTimeZone: "Europe/Helsinki",
     });
   });
 });
 
 describe("display formatting", () => {
-  it("handles DST offsets, midnight and fractional-hour zones without the device timezone", () => {
+  it("handles DST offsets, midnight and fractional-hour zones without the device timezone", async () => {
     expect(formatTimestamp("2026-01-05T07:00:00Z", "Europe/Helsinki")).toBe("2026-01-05 09:00:00");
     expect(formatTimestamp("2026-07-05T06:00:00Z", "Europe/Helsinki")).toBe("2026-07-05 09:00:00");
-    expect(formatTimestamp("2026-07-05T03:00:00Z", "America/Asuncion")).toBe("2026-07-05 00:00:00");
+    expect(formatTimestamp("2026-07-05T03:00:00Z", "America/Argentina/Buenos_Aires")).toBe("2026-07-05 00:00:00");
     expect(formatTimestamp("2026-07-05T00:00:00Z", "Asia/Kathmandu")).toBe("2026-07-05 05:45:00");
     expect(isTimeZone("Europe/Helsinki")).toBe(true);
     expect(isTimeZone(undefined)).toBe(false);

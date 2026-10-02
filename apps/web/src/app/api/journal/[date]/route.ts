@@ -13,9 +13,9 @@ export const GET = handler(async (request: Request, { params }: Params) => {
   const { date } = await params;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return bad("date must be YYYY-MM-DD");
   const url = new URL(request.url);
-  const timeZone = getTimeZone();
+  const timeZone = await getTimeZone();
 
-  const { rows, trades } = queryTrades(readFilters(url.searchParams));
+  const { rows, trades } = await queryTrades(readFilters(url.searchParams));
   const dayTradeIndexes = trades
     .map((trade, index) => ({ trade, index }))
     .filter(({ trade }) => trade.closedAt && dayKeyOf(trade.closedAt, timeZone) === date);
@@ -24,11 +24,11 @@ export const GET = handler(async (request: Request, { params }: Params) => {
   // Intraday curve needs exit timestamps — one fetch per involved account.
   const times = new Map<string, string>();
   for (const accountId of new Set(dayTrades.map((trade) => trade.accountId))) {
-    const fills = db.select().from(executions).where(eq(executions.accountId, accountId)).all();
+    const fills = await db.select().from(executions).where(eq(executions.accountId, accountId)).all();
     for (const fill of fills) times.set(fill.id, fill.executedAt);
   }
 
-  const note = db.select().from(journalDays).where(eq(journalDays.date, date)).get();
+  const note = await db.select().from(journalDays).where(eq(journalDays.date, date)).get();
   return ok({
     date,
     metrics: computeMetrics(dayTrades, { timeZone }),
@@ -42,7 +42,7 @@ export const PUT = handler(async (request: Request, { params }: Params) => {
   const { date } = await params;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return bad("date must be YYYY-MM-DD");
   const { note } = (await request.json()) as { note?: string };
-  db.insert(journalDays)
+  await db.insert(journalDays)
     .values({ date, note: note ?? "", updatedAt: nowIso() })
     .onConflictDoUpdate({
       target: journalDays.date,

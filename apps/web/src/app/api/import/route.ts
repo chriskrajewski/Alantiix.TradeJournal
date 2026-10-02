@@ -19,6 +19,8 @@ import {
   readAiImportPreview,
 } from "@/server/ai-import";
 
+export const maxDuration = 60;
+
 interface ImportBody {
   mode: "preview" | "commit";
   content: string;
@@ -50,7 +52,7 @@ export const POST = handler(async (request: Request) => {
     return bad("Invalid filename");
   if (body.timeZone !== undefined)
     requireValue(isTimeZone(body.timeZone), "Enter a valid IANA statement timezone.");
-  const timeZone = body.timeZone ?? getImportTimeZone();
+  const timeZone = body.timeZone ?? await getImportTimeZone();
   requireValue(
     body.encoding === undefined || body.encoding === "text" || body.encoding === "pdf",
     "Unsupported file encoding.",
@@ -117,7 +119,7 @@ export const POST = handler(async (request: Request) => {
       needsSymbol: parsed.needsSymbol,
       reconciliation:
         parsed.format === "ninjatrader" && body.accountId
-          ? previewNinjaTraderImport(body.accountId, parsed, body.content, timeZone, body.review)
+          ? await previewNinjaTraderImport(body.accountId, parsed, body.content, timeZone, body.review)
           : undefined,
     });
   }
@@ -127,8 +129,8 @@ export const POST = handler(async (request: Request) => {
   if (parsed.executions.length === 0) return bad("No executions to import");
   const result =
     parsed.format === "ninjatrader"
-      ? commitNinjaTraderImport(body.accountId, parsed, body.content, timeZone, body.review)
-      : insertExecutions(
+      ? await commitNinjaTraderImport(body.accountId, parsed, body.content, timeZone, body.review)
+      : await insertExecutions(
           body.accountId,
           parsed.executions as ImportedExecution[],
           "import",

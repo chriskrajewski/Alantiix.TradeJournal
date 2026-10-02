@@ -1,4 +1,4 @@
-import { afterAll, expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi , beforeAll} from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,8 +9,12 @@ process.env.JOURNAL_DATA_DIR = scratch;
 vi.stubEnv("JOURNAL_PASSWORD", "");
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
 const { POST, GET } = await import("../src/app/api/accounts/route");
-const { db, executions, trades } = await import("../src/db");
+const { db, executions, trades, ensureDb } = await import("../src/db");
 const { insertExecutions } = await import("../src/server/executions");
+
+beforeAll(async () => {
+  await ensureDb();
+});
 
 it("creates an import destination with the chosen currency/balance and accepts fills under its returned id", async () => {
   const response = await POST(
@@ -31,7 +35,7 @@ it("creates an import destination with the chosen currency/balance and accepts f
   expect(listed.accounts).toMatchObject([
     { id, name: "Import verification", kind: "import", currency: "USD", initialBalance: 50000 },
   ]);
-  insertExecutions(
+  await insertExecutions(
     id,
     [
       {
@@ -55,14 +59,13 @@ it("creates an import destination with the chosen currency/balance and accepts f
     ],
     "import",
   );
-  expect(db.select().from(executions).all()).toHaveLength(2);
-  expect(db.select().from(trades).all()).toMatchObject([
+  expect(await db.select().from(executions).all()).toHaveLength(2);
+  expect(await db.select().from(trades).all()).toMatchObject([
     { accountId: id, status: "win", netPnl: 9.3 },
   ]);
 });
 
-afterAll(() => {
-  db.$client.close();
+afterAll(async () => {
   vi.unstubAllEnvs();
   if (previous === undefined) delete process.env.JOURNAL_DATA_DIR;
   else process.env.JOURNAL_DATA_DIR = previous;

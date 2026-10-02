@@ -11,12 +11,12 @@ type Params = { params: Promise<{ key: string }> };
 
 export const GET = handler(async (_request: Request, { params }: Params) => {
   const { key } = await params;
-  const row = getTradeByKey(key);
+  const row = await getTradeByKey(key);
   if (!row) return bad("Trade not found", 404);
-  const trade = rowToTrade(row);
-  const fills = listExecutions(row.accountId, trade.executionIds);
+  const trade = await rowToTrade(row);
+  const fills = await listExecutions(row.accountId, trade.executionIds);
   return ok({
-    timeZone: getTimeZone(),
+    timeZone: await getTimeZone(),
     trade: {
       ...row,
       status: trade.status,
@@ -25,11 +25,13 @@ export const GET = handler(async (_request: Request, { params }: Params) => {
       plannedR: plannedR(trade),
       contractMultiplier: trade.contractMultiplier ?? null,
       currency:
-        db
-          .select({ currency: accounts.currency })
-          .from(accounts)
-          .where(eq(accounts.id, row.accountId))
-          .get()?.currency ?? "USD",
+        (
+          await db
+            .select({ currency: accounts.currency })
+            .from(accounts)
+            .where(eq(accounts.id, row.accountId))
+            .get()
+        )?.currency ?? "USD",
     },
     executions: fills,
   });
@@ -49,7 +51,7 @@ interface AnnotateBody {
 export const PATCH = handler(async (request: Request, { params }: Params) => {
   const { key } = await params;
   const decoded = key;
-  const row = getTradeByKey(decoded);
+  const row = await getTradeByKey(decoded);
   if (!row) return bad("Trade not found", 404);
 
   const body = (await request.json()) as AnnotateBody;
@@ -75,7 +77,7 @@ export const PATCH = handler(async (request: Request, { params }: Params) => {
       `Invalid ${field}.`,
     );
   requireValue(
-    !body.playbookId || db.select().from(playbooks).where(eq(playbooks.id, body.playbookId)).get(),
+    !body.playbookId || await db.select().from(playbooks).where(eq(playbooks.id, body.playbookId)).get(),
     "Playbook not found.",
   );
   const patch: Partial<typeof trades.$inferInsert> = {};
@@ -89,15 +91,15 @@ export const PATCH = handler(async (request: Request, { params }: Params) => {
   if (body.reviewed !== undefined) patch.reviewedAt = body.reviewed ? nowIso() : null;
 
   if (!Object.keys(patch).length) return ok({ updated: true });
-  db.update(trades).set(patch).where(eq(trades.key, decoded)).run();
+  await db.update(trades).set(patch).where(eq(trades.key, decoded)).run();
   return ok({ updated: true });
 });
 
 export const DELETE = handler(async (_request: Request, { params }: Params) => {
   const { key } = await params;
-  const row = getTradeByKey(key);
+  const row = await getTradeByKey(key);
   if (!row) return bad("Trade not found", 404);
   // Deleting a trade means deleting its executions; the rebuild removes the row.
-  deleteExecutionsForTrades(row.accountId, JSON.parse(row.executionIdsJson) as string[]);
+  await deleteExecutionsForTrades(row.accountId, JSON.parse(row.executionIdsJson) as string[]);
   return ok({ deleted: true });
 });
