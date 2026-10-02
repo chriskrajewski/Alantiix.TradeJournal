@@ -18,18 +18,18 @@ import {
   type PropData,
 } from "@/lib/prop-firms";
 export class PropConflict extends RequestError {}
-export const propToday = () =>
+export const propToday = async () =>
   new Intl.DateTimeFormat("en-CA", {
-    timeZone: getTimeZone(),
+    timeZone: await getTimeZone(),
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
-export const propData = (): PropData => ({
-  accounts: db.select().from(propAccounts).all() as PropAccount[],
-  entries: db.select().from(propEntries).all() as PropEntry[],
-  receipts: db.select().from(propReceipts).all() as PropReceipt[],
-  today: propToday(),
+export const propData = async (): Promise<PropData> => ({
+  accounts: (await db.select().from(propAccounts).all()) as PropAccount[],
+  entries: (await db.select().from(propEntries).all()) as PropEntry[],
+  receipts: (await db.select().from(propReceipts).all()) as PropReceipt[],
+  today: await propToday(),
 });
 const text = (v: unknown, title: string, max = 200, required = true) => {
   requireValue(
@@ -48,7 +48,7 @@ const choice = <T extends string>(v: unknown, values: readonly T[], name: string
   requireValue(values.includes(v as T), `Choose ${name}.`);
   return v as T;
 };
-const date = (v: unknown, title: string, future = false) => {
+const date = async (v: unknown, title: string, future = false) => {
   const day = text(v, title, 10);
   requireValue(
     /^\d{4}-\d{2}-\d{2}$/.test(day) &&
@@ -56,11 +56,11 @@ const date = (v: unknown, title: string, future = false) => {
       new Date(day).toISOString().slice(0, 10) === day,
     `Enter a valid ${title}.`,
   );
-  requireValue(future || day <= propToday(), `${title} cannot be in the future.`);
+  requireValue(future || day <= (await propToday()), `${title} cannot be in the future.`);
   return day;
 };
-const maybeDate = (v: unknown, title: string, future = false) =>
-  v === "" || v == null ? null : date(v, title, future);
+const maybeDate = async (v: unknown, title: string, future = false) =>
+  v === "" || v == null ? null : await date(v, title, future);
 const money = (v: unknown, currency: string) => {
   try {
     return toMinor(v, currency);
@@ -77,14 +77,14 @@ const currency = (v: unknown) => {
   }
   return code;
 };
-const audit = (
+const audit = async (
   entityType: string,
   entityId: string,
   before: unknown,
   after: unknown,
   reason: string,
 ) =>
-  db
+  await db
     .insert(propAudit)
     .values({
       id: newId(),
@@ -110,11 +110,11 @@ const details = (body: Record<string, unknown>) => ({
 });
 const editReason = (body: Record<string, unknown>, old: unknown) =>
   old ? text(body.reason, "a reason for this change", 500) : "Created";
-export function mutateProp(body: Record<string, unknown>) {
-  return db.transaction(() => {
+export async function mutateProp(body: Record<string, unknown>) {
+  {
     const id = idValue(body.id);
     if (body.action === "account.save") {
-      const old = db.select().from(propAccounts).where(eq(propAccounts.id, id)).get();
+      const old = await db.select().from(propAccounts).where(eq(propAccounts.id, id)).get();
       const code = currency(body.currency),
         parentId = optionalId(body.parentId),
         journalAccountId = optionalId(body.journalAccountId);
@@ -127,9 +127,9 @@ export function mutateProp(body: Record<string, unknown>) {
         sizeMinor: body.size === "" || body.size == null ? null : money(body.size, code),
         parentId,
         journalAccountId,
-        openedOn: date(body.openedOn, "opening date"),
-        closedOn: maybeDate(body.closedOn, "closing date"),
-        renewalOn: maybeDate(body.renewalOn, "next renewal date", true),
+        openedOn: await date(body.openedOn, "opening date"),
+        closedOn: await maybeDate(body.closedOn, "closing date"),
+        renewalOn: await maybeDate(body.renewalOn, "next renewal date", true),
         renewalMinor:
           body.renewalAmount === "" || body.renewalAmount == null
             ? null
@@ -158,7 +158,7 @@ export function mutateProp(body: Record<string, unknown>) {
       );
       if (journalAccountId)
         requireValue(
-          db
+          await db
             .select({ id: accounts.id })
             .from(accounts)
             .where(eq(accounts.id, journalAccountId))
@@ -166,7 +166,7 @@ export function mutateProp(body: Record<string, unknown>) {
           "Linked journal account not found.",
         );
       if (parentId) {
-        const parent = db.select().from(propAccounts).where(eq(propAccounts.id, parentId)).get();
+        const parent = await db.select().from(propAccounts).where(eq(propAccounts.id, parentId)).get();
         requireValue(
           parent &&
             parent.id !== id &&
@@ -181,12 +181,12 @@ export function mutateProp(body: Record<string, unknown>) {
           requireValue(!visited.has(ancestor.id), "Account lineage cannot contain a cycle.");
           visited.add(ancestor.id);
           ancestor = ancestor.parentId
-            ? db.select().from(propAccounts).where(eq(propAccounts.id, ancestor.parentId)).get()
+            ? await db.select().from(propAccounts).where(eq(propAccounts.id, ancestor.parentId)).get()
             : undefined;
         }
       }
       if (old) {
-        const phases = db.select().from(propAccounts).where(eq(propAccounts.parentId, id)).all();
+        const phases = await db.select().from(propAccounts).where(eq(propAccounts.parentId, id)).all();
         requireValue(
           phases.every(
             (a) =>
@@ -196,7 +196,7 @@ export function mutateProp(body: Record<string, unknown>) {
           ),
           "This change conflicts with a linked phase or reset.",
         );
-        const linked = db.select().from(propEntries).where(eq(propEntries.accountId, id)).all();
+        const linked = await db.select().from(propEntries).where(eq(propEntries.accountId, id)).all();
         requireValue(
           !linked.length ||
             (old.currency === code && old.firm === values.firm && old.program === values.program),
@@ -208,11 +208,12 @@ export function mutateProp(body: Record<string, unknown>) {
         );
       } else
         requireValue(
-          db.select({ n: count() }).from(propAccounts).get()!.n < 2000,
+          (await db.select({ n: count() }).from(propAccounts).get())!.n < 2000,
           "Account limit reached (2,000).",
         );
       if (old && body.revision === 0 && same(old, values)) return { id };
       checkRevision(old, body.revision);
+      const reason = editReason(body, old);
       const updated = {
         ...values,
         id,
@@ -221,15 +222,15 @@ export function mutateProp(body: Record<string, unknown>) {
         createdAt: old?.createdAt ?? nowIso(),
         updatedAt: nowIso(),
       };
-      db.insert(propAccounts)
+      await db.insert(propAccounts)
         .values(updated)
         .onConflictDoUpdate({ target: propAccounts.id, set: updated })
         .run();
-      audit("account", id, old, updated, editReason(body, old));
+      await audit("account", id, old, updated, reason);
       return { id };
     }
     if (body.action === "account.archive") {
-      const old = db.select().from(propAccounts).where(eq(propAccounts.id, id)).get();
+      const old = await db.select().from(propAccounts).where(eq(propAccounts.id, id)).get();
       requireValue(old, "Account not found.");
       checkRevision(old, body.revision);
       requireValue(typeof body.archived === "boolean", "Choose archive or restore.");
@@ -239,16 +240,17 @@ export function mutateProp(body: Record<string, unknown>) {
         revision: old.revision + 1,
         updatedAt: nowIso(),
       };
-      db.update(propAccounts).set(updated).where(eq(propAccounts.id, id)).run();
-      audit("account", id, old, updated, text(body.reason, "a reason", 500));
+      const reason = text(body.reason, "a reason", 500);
+      await db.update(propAccounts).set(updated).where(eq(propAccounts.id, id)).run();
+      await audit("account", id, old, updated, reason);
       return { id };
     }
     if (body.action === "entry.save") {
-      const old = db.select().from(propEntries).where(eq(propEntries.id, id)).get();
+      const old = await db.select().from(propEntries).where(eq(propEntries.id, id)).get();
       requireValue(!old?.voided, "Restore this entry before editing it.");
       const accountId = optionalId(body.accountId),
         account = accountId
-          ? db.select().from(propAccounts).where(eq(propAccounts.id, accountId)).get()
+          ? await db.select().from(propAccounts).where(eq(propAccounts.id, accountId)).get()
           : null;
       requireValue(!accountId || account, "Prop account not found.");
       const code = currency(body.currency),
@@ -274,8 +276,8 @@ export function mutateProp(body: Record<string, unknown>) {
           kind === "expense"
             ? choice(body.category, EXPENSE_CATEGORIES, "an expense category")
             : kind,
-        occurredOn: date(body.occurredOn, kind === "payout" ? "request date" : "cash date"),
-        dueOn: kind === "payout" ? maybeDate(body.dueOn, "expected payment date", true) : null,
+        occurredOn: await date(body.occurredOn, kind === "payout" ? "request date" : "cash date"),
+        dueOn: kind === "payout" ? await maybeDate(body.dueOn, "expected payment date", true) : null,
         status:
           kind === "payout"
             ? choice(body.status, PAYOUT_STATES, "a payout status")
@@ -306,7 +308,7 @@ export function mutateProp(body: Record<string, unknown>) {
       }
       if (kind === "refund") {
         const expense = parentId
-          ? db.select().from(propEntries).where(eq(propEntries.id, parentId)).get()
+          ? await db.select().from(propEntries).where(eq(propEntries.id, parentId)).get()
           : null;
         requireValue(
           expense &&
@@ -319,11 +321,13 @@ export function mutateProp(body: Record<string, unknown>) {
             expense.occurredOn <= values.occurredOn,
           "Link this refund to a matching expense in the same account, firm and currency.",
         );
-        const other = db
-          .select()
-          .from(propEntries)
-          .where(eq(propEntries.parentId, expense.id))
-          .all()
+        const other = (
+          await db
+            .select()
+            .from(propEntries)
+            .where(eq(propEntries.parentId, expense.id))
+            .all()
+        )
           .filter((e) => !e.voided && e.id !== id)
           .reduce((sum, e) => sum + e.amountMinor, 0);
         requireValue(
@@ -340,11 +344,11 @@ export function mutateProp(body: Record<string, unknown>) {
             old.parentId === values.parentId,
           "Account, currency, firm, entry type and refund link are fixed. Void an incorrect entry and add a replacement.",
         );
-        const children = db
+        const children = (await db
           .select()
           .from(propEntries)
           .where(eq(propEntries.parentId, id))
-          .all()
+          .all())
           .filter((e) => !e.voided);
         requireValue(
           !children.length ||
@@ -352,11 +356,11 @@ export function mutateProp(body: Record<string, unknown>) {
               children.every((e) => e.occurredOn >= values.occurredOn)),
           "This change conflicts with recorded refunds.",
         );
-        const receipts = db
+        const receipts = (await db
           .select()
           .from(propReceipts)
           .where(eq(propReceipts.payoutId, id))
-          .all() as PropReceipt[];
+          .all()) as PropReceipt[];
         requireValue(
           receipts.filter((r) => !r.voided).every((r) => r.occurredOn >= values.occurredOn),
           "Request date cannot follow a recorded payment.",
@@ -376,12 +380,13 @@ export function mutateProp(body: Record<string, unknown>) {
           "Add the payout request first, then record the actual receipt.",
         );
         requireValue(
-          db.select({ n: count() }).from(propEntries).get()!.n < 20_000,
+          (await db.select({ n: count() }).from(propEntries).get())!.n < 20_000,
           "Entry limit reached (20,000).",
         );
       }
       if (old && body.revision === 0 && same(old, values)) return { id };
       checkRevision(old, body.revision);
+      const reason = editReason(body, old);
       const updated = {
         ...values,
         id,
@@ -390,36 +395,42 @@ export function mutateProp(body: Record<string, unknown>) {
         createdAt: old?.createdAt ?? nowIso(),
         updatedAt: nowIso(),
       };
-      db.insert(propEntries)
+      await db.insert(propEntries)
         .values(updated)
         .onConflictDoUpdate({ target: propEntries.id, set: updated })
         .run();
-      audit("entry", id, old, updated, editReason(body, old));
+      await audit("entry", id, old, updated, reason);
       return { id };
     }
     if (body.action === "entry.void") {
-      const old = db.select().from(propEntries).where(eq(propEntries.id, id)).get();
+      const old = await db.select().from(propEntries).where(eq(propEntries.id, id)).get();
       requireValue(old, "Entry not found.");
       checkRevision(old, body.revision);
       requireValue(typeof body.voided === "boolean", "Choose void or restore.");
-      const refunds = db
-        .select()
-        .from(propEntries)
-        .where(eq(propEntries.parentId, id))
-        .all()
-        .filter((e) => !e.voided);
+      const refunds = (
+        await db
+          .select()
+          .from(propEntries)
+          .where(eq(propEntries.parentId, id))
+          .all()
+      ).filter((e) => !e.voided);
       requireValue(
         !body.voided || !refunds.length,
         "Void linked refunds before voiding their expense.",
       );
       if (!body.voided && old.kind === "refund") {
-        const parent = db.select().from(propEntries).where(eq(propEntries.id, old.parentId!)).get();
-        const others = db
+        const parent = await db
           .select()
           .from(propEntries)
-          .where(eq(propEntries.parentId, old.parentId!))
-          .all()
-          .filter((e) => !e.voided && e.id !== id);
+          .where(eq(propEntries.id, old.parentId!))
+          .get();
+        const others = (
+          await db
+            .select()
+            .from(propEntries)
+            .where(eq(propEntries.parentId, old.parentId!))
+            .all()
+        ).filter((e) => !e.voided && e.id !== id);
         requireValue(
           parent &&
             !parent.voided &&
@@ -434,23 +445,24 @@ export function mutateProp(body: Record<string, unknown>) {
         revision: old.revision + 1,
         updatedAt: nowIso(),
       };
-      db.update(propEntries).set(updated).where(eq(propEntries.id, id)).run();
-      audit("entry", id, old, updated, text(body.reason, "a reason", 500));
+      const reason = text(body.reason, "a reason", 500);
+      await db.update(propEntries).set(updated).where(eq(propEntries.id, id)).run();
+      await audit("entry", id, old, updated, reason);
       return { id };
     }
     if (body.action === "receipt.add" || body.action === "receipt.void") {
       const payoutId = idValue(body.payoutId),
-        payout = db.select().from(propEntries).where(eq(propEntries.id, payoutId)).get();
+        payout = await db.select().from(propEntries).where(eq(propEntries.id, payoutId)).get();
       requireValue(
         payout && payout.kind === "payout" && !payout.voided,
         "Choose an active payout record.",
       );
-      const old = db.select().from(propReceipts).where(eq(propReceipts.id, id)).get();
-      const rows = db
+      const old = await db.select().from(propReceipts).where(eq(propReceipts.id, id)).get();
+      const rows = (await db
         .select()
         .from(propReceipts)
         .where(eq(propReceipts.payoutId, payoutId))
-        .all() as PropReceipt[];
+        .all()) as PropReceipt[];
       let updated: PropReceipt;
       if (body.action === "receipt.add") {
         requireValue(
@@ -462,7 +474,7 @@ export function mutateProp(body: Record<string, unknown>) {
           payoutId,
           kind: choice(body.kind, ["receipt", "reversal"] as const, "receipt or reversal"),
           amountMinor: money(body.amount, payout.currency),
-          occurredOn: date(body.occurredOn, "settlement date"),
+          occurredOn: await date(body.occurredOn, "settlement date"),
           ...details(body),
           voided: false,
           createdAt: old?.createdAt ?? nowIso(),
@@ -477,7 +489,7 @@ export function mutateProp(body: Record<string, unknown>) {
           "Receipt ID already exists. Void an incorrect receipt and add a replacement.",
         );
         requireValue(
-          db.select({ n: count() }).from(propReceipts).get()!.n < 50_000,
+          (await db.select({ n: count() }).from(propReceipts).get())!.n < 50_000,
           "Receipt limit reached (50,000).",
         );
       } else {
@@ -506,7 +518,11 @@ export function mutateProp(body: Record<string, unknown>) {
         !["rejected", "cancelled"].includes(payout.status) || balance === 0,
         "Reopen the payout before restoring received money.",
       );
-      db.insert(propReceipts)
+      const reason =
+        body.action === "receipt.add"
+          ? `Recorded ${updated.kind}`
+          : text(body.reason, "a reason", 500);
+      await db.insert(propReceipts)
         .values(updated)
         .onConflictDoUpdate({ target: propReceipts.id, set: updated })
         .run();
@@ -516,24 +532,22 @@ export function mutateProp(body: Record<string, unknown>) {
         updatedAt: nowIso(),
         status: balance === 0 && payout.status === "completed" ? "approved" : payout.status,
       };
-      db.update(propEntries).set(updatedPayout).where(eq(propEntries.id, payoutId)).run();
-      audit(
+      await db.update(propEntries).set(updatedPayout).where(eq(propEntries.id, payoutId)).run();
+      await audit(
         "entry",
         payoutId,
         { payout, receipt: old ?? null },
         { payout: updatedPayout, receipt: updated },
-        body.action === "receipt.add"
-          ? `Recorded ${updated.kind}`
-          : text(body.reason, "a reason", 500),
+        reason,
       );
       return { id };
     }
     throw new RequestError("Choose a supported prop tracker action.");
-  });
+  }
 }
-export function propHistory(type: string, id: string) {
+export async function propHistory(type: string, id: string) {
   requireValue(["account", "entry"].includes(type), "Choose an account or entry history.");
-  return db
+  return await db
     .select()
     .from(propAudit)
     .where(and(eq(propAudit.entityType, type), eq(propAudit.entityId, idValue(id))))

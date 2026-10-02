@@ -10,44 +10,46 @@ import {
   type AiSettingsPayload,
 } from "@/lib/ai-settings";
 
-export const getJournalDefaults = (): JournalDefaults => {
+export const getJournalDefaults = async (): Promise<JournalDefaults> => {
   try {
-    return { ...EMPTY_DEFAULTS, ...JSON.parse(getSetting("journalDefaults") ?? "{}") };
+    return { ...EMPTY_DEFAULTS, ...JSON.parse((await getSetting("journalDefaults")) ?? "{}") };
   } catch {
     return EMPTY_DEFAULTS;
   }
 };
 
-export const getSetting = (key: string): string | null =>
-  db.select().from(settings).where(eq(settings.key, key)).get()?.value ?? null;
+export const getSetting = async (key: string): Promise<string | null> =>
+  (await db.select().from(settings).where(eq(settings.key, key)).get())?.value ?? null;
 
-export const setSetting = (key: string, value: string): void => {
-  db.insert(settings)
+export const setSetting = async (key: string, value: string): Promise<void> => {
+  await db
+    .insert(settings)
     .values({ key, value })
     .onConflictDoUpdate({ target: settings.key, set: { value } })
     .run();
 };
 
-export const deleteSetting = (key: string): void => {
-  db.delete(settings).where(eq(settings.key, key)).run();
+export const deleteSetting = async (key: string): Promise<void> => {
+  await db.delete(settings).where(eq(settings.key, key)).run();
 };
 
-export const getCurrencyConversion = () => {
-  const saved = getSetting("currencyConversion");
+export const getCurrencyConversion = async () => {
+  const saved = await getSetting("currencyConversion");
   if (!saved) return DEFAULT_CONVERSION;
   // Invalid saved settings must not silently fall back to a different valuation.
   return parseCurrencyConversion(JSON.parse(saved));
 };
 
 /** Journal display timezone (IANA), default UTC. */
-export const getTimeZone = (): string => getSetting("timeZone") ?? "UTC";
+export const getTimeZone = async (): Promise<string> => (await getSetting("timeZone")) ?? "UTC";
 
 /** Preserve the legacy parsing default until a separate import zone is saved. */
-export const getImportTimeZone = (): string => getSetting("importTimeZone") ?? getTimeZone();
+export const getImportTimeZone = async (): Promise<string> =>
+  (await getSetting("importTimeZone")) ?? (await getTimeZone());
 
 /** Per-symbol contract multipliers for futures/options P&L. */
-export const getMultipliers = (): Record<string, number> => {
-  const raw = getSetting("multipliers");
+export const getMultipliers = async (): Promise<Record<string, number>> => {
+  const raw = await getSetting("multipliers");
   if (!raw) return {};
   try {
     return JSON.parse(raw) as Record<string, number>;
@@ -61,10 +63,10 @@ export const aiKeyEnvironment = (provider: AiProvider): string | null =>
   null;
 
 /** Provider keys are stored separately and encrypted like broker credentials. */
-export const getAiKey = (provider: AiProvider): string | null => {
+export const getAiKey = async (provider: AiProvider): Promise<string | null> => {
   const environment = aiKeyEnvironment(provider);
   if (environment) return environment;
-  const envelope = getSetting(`${provider}KeyEnc`);
+  const envelope = await getSetting(`${provider}KeyEnc`);
   if (!envelope) return null;
   try {
     const key = decryptJson<unknown>(envelope);
@@ -74,39 +76,45 @@ export const getAiKey = (provider: AiProvider): string | null => {
   }
 };
 
-export const setAiKey = (provider: AiProvider, key: string | null): void => {
-  if (key === null) deleteSetting(`${provider}KeyEnc`);
-  else setSetting(`${provider}KeyEnc`, encryptJson(key.trim()));
+export const setAiKey = async (provider: AiProvider, key: string | null): Promise<void> => {
+  if (key === null) await deleteSetting(`${provider}KeyEnc`);
+  else await setSetting(`${provider}KeyEnc`, encryptJson(key.trim()));
 };
 
-export const getAnthropicKey = (): string | null => getAiKey("anthropic");
-export const setAnthropicKey = (key: string | null): void => setAiKey("anthropic", key);
+export const getAnthropicKey = (): Promise<string | null> => getAiKey("anthropic");
+export const setAnthropicKey = (key: string | null): Promise<void> => setAiKey("anthropic", key);
 
-export const getAiProvider = (): AiProvider => {
-  const selected = getSetting("aiProvider");
+export const getAiProvider = async (): Promise<AiProvider> => {
+  const selected = await getSetting("aiProvider");
   if (isAiProvider(selected)) return selected;
   // Preserve existing Anthropic setups; an OpenAI-only setup works without a UI visit.
-  return !getAiKey("anthropic") && getAiKey("openai") ? "openai" : "anthropic";
+  return !(await getAiKey("anthropic")) && (await getAiKey("openai")) ? "openai" : "anthropic";
 };
 
 export const aiModelSetting = (provider: AiProvider): string =>
   provider === "anthropic" ? "aiModel" : "openaiModel";
 
-export const getAiModel = (provider: AiProvider): string =>
-  getSetting(aiModelSetting(provider))?.trim() || AI_DEFAULT_MODELS[provider];
+export const getAiModel = async (provider: AiProvider): Promise<string> =>
+  (await getSetting(aiModelSetting(provider)))?.trim() || AI_DEFAULT_MODELS[provider];
 
-export const getAiSettings = (): AiSettingsPayload => {
-  const aiProvider = getAiProvider();
-  const connection = (provider: AiProvider) => ({
-    configured: Boolean(getAiKey(provider)),
-    source: aiKeyEnvironment(provider)
-      ? ("environment" as const)
-      : getAiKey(provider)
-        ? ("saved" as const)
-        : null,
-    model: getAiModel(provider),
-  });
-  const aiConnections = { anthropic: connection("anthropic"), openai: connection("openai") };
+export const getAiSettings = async (): Promise<AiSettingsPayload> => {
+  const aiProvider = await getAiProvider();
+  const connection = async (provider: AiProvider) => {
+    const key = await getAiKey(provider);
+    return {
+      configured: Boolean(key),
+      source: aiKeyEnvironment(provider)
+        ? ("environment" as const)
+        : key
+          ? ("saved" as const)
+          : null,
+      model: await getAiModel(provider),
+    };
+  };
+  const aiConnections = {
+    anthropic: await connection("anthropic"),
+    openai: await connection("openai"),
+  };
   return {
     aiProvider,
     aiConfigured: aiConnections[aiProvider].configured,

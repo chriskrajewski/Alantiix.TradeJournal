@@ -185,7 +185,7 @@ export async function parseStatementWithAi(
       (typeof options.apiKey === "string" && options.apiKey.length <= 1000),
     "Invalid API key.",
   );
-  const apiKey = options.apiKey?.trim() || getAiKey(options.provider);
+  const apiKey = options.apiKey?.trim() || (await getAiKey(options.provider));
   requireValue(apiKey, "Add an API key for the selected provider to parse this upload.");
   let input: UserContent;
   if (statement.encoding === "pdf") {

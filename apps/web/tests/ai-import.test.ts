@@ -9,7 +9,7 @@ vi.mock("ai", async (original) => ({
 const originalDir = process.env.JOURNAL_DATA_DIR;
 const scratch = mkdtempSync(join(tmpdir(), "journal-ai-import-"));
 process.env.JOURNAL_DATA_DIR = scratch;
-const { db, accounts, executions, trades, settings } = await import("../src/db");
+const { db, accounts, executions, trades, settings, ensureDb } = await import("../src/db");
 const { setSetting } = await import("../src/server/settings");
 const { generateText } = await import("ai");
 const { validateAiExtraction, readAiImportPreview } = await import("../src/server/ai-import");
@@ -60,22 +60,22 @@ const modelResult = (output: unknown, finishReason = "stop") =>
   vi
     .mocked(generateText)
     .mockResolvedValue({ output, finishReason } as Awaited<ReturnType<typeof generateText>>);
-beforeEach(() => {
+beforeEach(async () => {
+  await ensureDb();
   vi.stubEnv("JOURNAL_PASSWORD", "");
   vi.stubEnv("OPENAI_API_KEY", "");
   vi.stubEnv("ANTHROPIC_API_KEY", "");
-  db.delete(trades).run();
-  db.delete(executions).run();
-  db.delete(accounts).run();
-  db.delete(settings).run();
-  db.insert(accounts)
+  await db.delete(trades).run();
+  await db.delete(executions).run();
+  await db.delete(accounts).run();
+  await db.delete(settings).run();
+  await db.insert(accounts)
     .values({ id: "a", name: "Test", kind: "import", createdAt: "2026-01-01" })
     .run();
   vi.mocked(generateText).mockReset();
   modelResult(valid());
 });
-afterAll(() => {
-  db.$client.close();
+afterAll(async () => {
   vi.unstubAllEnvs();
   if (originalDir === undefined) delete process.env.JOURNAL_DATA_DIR;
   else process.env.JOURNAL_DATA_DIR = originalDir;
@@ -103,8 +103,8 @@ it.each(["openai", "anthropic"])(
     expect(preview.executions[0].executedAt).toBe("2026-09-01T14:30:00.000Z");
     expect(preview.sources).toHaveLength(2);
     expect(preview.aiPreviewToken).toBeTruthy();
-    expect(db.select().from(executions).all()).toHaveLength(0);
-    expect(db.select().from(settings).all()).toHaveLength(0);
+    expect(await db.select().from(executions).all()).toHaveLength(0);
+    expect(await db.select().from(settings).all()).toHaveLength(0);
     const options = vi.mocked(generateText).mock.calls[0]![0];
     expect(options.model).toHaveProperty(
       "provider",
@@ -116,7 +116,7 @@ it.each(["openai", "anthropic"])(
   },
 );
 it("commits exactly the reviewed result without calling AI again and preserves zero fees", async () => {
-  setSetting(
+  await setSetting(
     "journalDefaults",
     JSON.stringify({
       feeRules: [{ id: "default", accountId: "", symbol: "", amount: 5, mode: "execution" }],
@@ -136,10 +136,10 @@ it("commits exactly the reviewed result without calling AI again and preserves z
   expect((await response.json()).inserted).toBe(2);
   expect(generateText).toHaveBeenCalledTimes(1);
   expect(
-    db
+    (await db
       .select()
       .from(executions)
-      .all()
+      .all())
       .map((e) => e.fee),
   ).toEqual([0, 1]);
   expect((await (await request(commit)).json()).duplicates).toBe(2);
@@ -164,7 +164,7 @@ it("requires review and rejects tampered or stale previews", async () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31 * 60_000);
   expect(() => readAiImportPreview(base, preview.aiPreviewToken)).toThrow(/expired/);
   now.mockRestore();
-  expect(db.select().from(executions).all()).toHaveLength(0);
+  expect(await db.select().from(executions).all()).toHaveLength(0);
 });
 it.each([
   { complete: false },
@@ -207,5 +207,5 @@ it("fails closed on truncated model output and sanitizes provider errors", async
   vi.mocked(generateText).mockRejectedValue(new Error("private-key provider request contents"));
   const response = await request({ ...base, mode: "preview" });
   expect(JSON.stringify(await response.json())).not.toContain("private-key");
-  expect(db.select().from(executions).all()).toHaveLength(0);
+  expect(await db.select().from(executions).all()).toHaveLength(0);
 });

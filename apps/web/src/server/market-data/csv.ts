@@ -8,14 +8,14 @@ import { result } from "./http";
 // Immutable datasets; keep at most 200,000 decoded bars across files.
 const decoded = new Map<string, MarketBar[]>();
 let decodedCount = 0;
-function datasetBars(id: string) {
+async function datasetBars(id: string) {
   const cached = decoded.get(id);
   if (cached) {
     decoded.delete(id);
     decoded.set(id, cached);
     return cached;
   }
-  const row = db
+  const row = await db
     .select({ json: marketCsvDatasets.barsJson })
     .from(marketCsvDatasets)
     .where(eq(marketCsvDatasets.id, id))
@@ -41,30 +41,31 @@ function lowerBound(bars: MarketBar[], time: number) {
   }
   return lo;
 }
-export function csvDatasets(): MarketCsvDataset[] {
-  return db
-    .select({
-      id: marketCsvDatasets.id,
-      name: marketCsvDatasets.name,
-      symbol: marketCsvDatasets.symbol,
-      resolution: marketCsvDatasets.resolution,
-      currency: marketCsvDatasets.currency,
-      priceBasis: marketCsvDatasets.priceBasis,
-      importedAt: marketCsvDatasets.importedAt,
-      count: marketCsvDatasets.barCount,
-      firstTime: marketCsvDatasets.firstTime,
-      lastTime: marketCsvDatasets.lastTime,
-    })
-    .from(marketCsvDatasets)
-    .all()
-    .map(({ firstTime, lastTime, ...row }) => ({
-      ...row,
-      resolution: row.resolution as Resolution,
-      from: new Date(firstTime).toISOString(),
-      to: new Date(lastTime + RESOLUTIONS[row.resolution as Resolution]).toISOString(),
-    }));
+export async function csvDatasets(): Promise<MarketCsvDataset[]> {
+  return (
+    await db
+      .select({
+        id: marketCsvDatasets.id,
+        name: marketCsvDatasets.name,
+        symbol: marketCsvDatasets.symbol,
+        resolution: marketCsvDatasets.resolution,
+        currency: marketCsvDatasets.currency,
+        priceBasis: marketCsvDatasets.priceBasis,
+        importedAt: marketCsvDatasets.importedAt,
+        count: marketCsvDatasets.barCount,
+        firstTime: marketCsvDatasets.firstTime,
+        lastTime: marketCsvDatasets.lastTime,
+      })
+      .from(marketCsvDatasets)
+      .all()
+  ).map(({ firstTime, lastTime, ...row }) => ({
+    ...row,
+    resolution: row.resolution as Resolution,
+    from: new Date(firstTime).toISOString(),
+    to: new Date(lastTime + RESOLUTIONS[row.resolution as Resolution]).toISOString(),
+  }));
 }
-export function importCsvDataset(input: {
+export async function importCsvDataset(input: {
   name: string;
   symbol: string;
   resolution: Resolution;
@@ -73,12 +74,13 @@ export function importCsvDataset(input: {
   content: string;
 }) {
   const bars = parseMarketCsv(input.content, input.symbol, input.resolution);
-  if (db.select({ id: marketCsvDatasets.id }).from(marketCsvDatasets).all().length >= 50)
+  if ((await db.select({ id: marketCsvDatasets.id }).from(marketCsvDatasets).all()).length >= 50)
     throw new MarketDataError("Remove an unused dataset before adding more (50-file limit).");
   const { name, symbol, resolution, currency, priceBasis } = input;
   const metadata = { name, symbol, resolution, currency, priceBasis };
   const id = randomUUID();
-  db.insert(marketCsvDatasets)
+  await db
+    .insert(marketCsvDatasets)
     .values({
       ...metadata,
       id,
@@ -91,12 +93,13 @@ export function importCsvDataset(input: {
     .run();
   return id;
 }
-export function removeCsvDataset(id: string) {
-  db.transaction((tx) => {
-    tx.delete(tradeExcursions)
+export async function removeCsvDataset(id: string) {
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(tradeExcursions)
       .where(sql`json_extract(${tradeExcursions.estimateJson}, '$.datasetId') = ${id}`)
       .run();
-    tx.delete(marketCsvDatasets).where(eq(marketCsvDatasets.id, id)).run();
+    await tx.delete(marketCsvDatasets).where(eq(marketCsvDatasets.id, id)).run();
   });
   const bars = decoded.get(id);
   if (bars) {
@@ -109,11 +112,11 @@ export const marketCsv: MarketDataProvider = {
   name: "Market data CSV",
   environmentKey: "",
   async test() {
-    if (!csvDatasets().length)
+    if (!(await csvDatasets()).length)
       throw new MarketDataError("Upload market candles in Settings first.");
   },
   async history(request) {
-    const candidates = db
+    const candidates = await db
       .select({
         id: marketCsvDatasets.id,
         name: marketCsvDatasets.name,
@@ -146,7 +149,7 @@ export const marketCsv: MarketDataProvider = {
         "More than one CSV dataset matches. Select the dataset on this trade.",
       );
     const row = choices[0]!;
-    const bars = datasetBars(row.id);
+    const bars = await datasetBars(row.id);
     const start = lowerBound(bars, request.from - RESOLUTIONS[request.resolution] + 1);
     const end = lowerBound(bars, request.to);
     return {

@@ -13,7 +13,7 @@ Trade Journal is a [LuxAlgo](https://luxalgo.com) open-source project.
 [![npm](https://img.shields.io/npm/v/@luxalgo/journal-core?label=npm&color=white)](https://www.npmjs.com/package/@luxalgo/journal-core)
 [![License](https://img.shields.io/badge/license-MIT-white)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/lang-TypeScript-white)](packages/core/src/types.ts)
-[![SQLite](https://img.shields.io/badge/db-SQLite-white)](#quickstart)
+[![SQLite](https://img.shields.io/badge/db-Turso%20libSQL-white)](#quickstart)
 
 [Homepage](https://www.luxalgo.com/trade-journal/) · [Quickstart](#quickstart) · [Features](#features) · [Screenshots](#screenshots) · [How it works](#how-it-works) · [Migrate](#migrating-from-tradezella-or-tradervue) · [Edge Score](docs/edge-score.md) · [Contributing](CONTRIBUTING.md)
 
@@ -21,7 +21,7 @@ Trade Journal is a [LuxAlgo](https://luxalgo.com) open-source project.
 
 ---
 
-**Record every trade. See what actually works.** Connect a broker, drop in a statement export, or add trades manually from the dashboard. Trade Journal rebuilds your history into round-trip trades, a P&L calendar, deep analytics, and a daily journal you can type, dictate, or ask questions of with your own AI. Your journal lives in a local SQLite database; broker sync, market data, and AI connect to the services you choose.
+**Record every trade. See what actually works.** Connect a broker, drop in a statement export, or add trades manually from the dashboard. Trade Journal rebuilds your history into round-trip trades, a P&L calendar, deep analytics, and a daily journal you can type, dictate, or ask questions of with your own AI. Your journal lives in **Turso (libSQL)**; broker sync, market data, and AI connect to the services you choose.
 
 <img src=".github/assets/screenshot-dashboard.png" alt="Trade Journal dashboard in dark mode with demo trades, P&L gauges, Edge Score v2, equity curve, and monthly calendar" width="100%" />
 
@@ -41,7 +41,7 @@ pnpm dev
 # http://localhost:3000
 ```
 
-Requirements: **Node 22+** and **pnpm 11.0.8** (the version pinned in `package.json`). First run creates the SQLite database and applies additive schema upgrades automatically. No migration tool, no setup wizard, no account. With the commands above, local data lives in `apps/web/data/`.
+Requirements: **Node 22+** and **pnpm 11.0.8** (the version pinned in `package.json`). First run applies additive schema upgrades automatically against Turso/libSQL (local `file:` URL when `TURSO_DATABASE_URL` is unset). No migration tool, no setup wizard, no account. With the commands above and no Turso URL set, local data lives in `apps/web/data/journal.db`.
 
 For smooth everyday use or UI reviews, stop the development server and run `pnpm preview`.
 This builds the app once, then serves the optimized production version at the same address,
@@ -60,26 +60,43 @@ The **Prop firms** page has its own **Load demo data** button: a read-only simul
 
 ### Docker
 
-```bash
-docker compose up -d
-# http://localhost:3000, data persisted in ./data on the host
-```
+**Unsupported** on this branch. Prefer [Vercel + Turso](#deploy-on-vercel). The root `Dockerfile` / `docker-compose.yml` are stubs so nobody mistakes volume-backed SQLite for a supported path.
 
-### Configuration (all optional)
+### Deploy on Vercel
 
-| Env var             | Effect                                                                                                   |
-| ------------------- | -------------------------------------------------------------------------------------------------------- |
-| `JOURNAL_PASSWORD`  | Require a password; recommended when accessible beyond localhost                                         |
-| `JOURNAL_SECRET`    | Encryption key source for credentials at rest (default: generated key file in the data dir)              |
-| `JOURNAL_DATA_DIR`  | Database, attachments, and local encryption key directory (default `./data` relative to the app process) |
-| `ANTHROPIC_API_KEY` | Anthropic AI key via env instead of the Settings page                                                    |
-| `OPENAI_API_KEY`    | OpenAI AI key via env instead of the Settings page                                                       |
+1. Create a Turso database (`turso db create trade-journal`) and copy the URL + auth token.
+2. In the Vercel project (team **chriskrajewski**, Root Directory `apps/web`, Node 22, install/build via pnpm from the monorepo root), set:
 
-Set these in the process environment or in `apps/web/.env.local` for local Next.js runs; the root [`.env.example`](.env.example) documents the optional values. For Docker, configure the service environment in [`docker-compose.yml`](docker-compose.yml).
+| Env var | Required | Notes |
+| --- | --- | --- |
+| `TURSO_DATABASE_URL` | **yes** | `libsql://…` from Turso |
+| `TURSO_AUTH_TOKEN` | **yes** | Turso DB token |
+| `JOURNAL_PASSWORD` | strongly yes | Single-user gate |
+| `JOURNAL_SECRET` | **yes** | Encryption key; no on-disk `.secret` on Vercel |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | optional | Or configure in Settings |
+| Market-data envs | optional | Or configure in Settings |
+
+3. Deploy. Long sync/import/AI/market routes set `maxDuration = 60`.
+
+Local without Turso: omit `TURSO_*` and the app uses `file:./data/journal.db` under `JOURNAL_DATA_DIR` (default `./data`).
+
+### Configuration
+
+| Env var | Effect |
+| --- | --- |
+| `TURSO_DATABASE_URL` | libSQL/Turso URL (`libsql://…` on Vercel; optional local `file:…`) |
+| `TURSO_AUTH_TOKEN` | Turso auth token (required for remote Turso) |
+| `JOURNAL_PASSWORD` | Require a password; recommended when accessible beyond localhost |
+| `JOURNAL_SECRET` | Encryption key for credentials at rest (**required** in production / Vercel) |
+| `JOURNAL_DATA_DIR` | Local-only parent for the default `file:` DB (ignored when `TURSO_DATABASE_URL` is set) |
+| `ANTHROPIC_API_KEY` | Anthropic AI key via env instead of the Settings page |
+| `OPENAI_API_KEY` | OpenAI AI key via env instead of the Settings page |
+
+Set these in the process environment, `apps/web/.env.local` for local Next.js runs, or the Vercel project env UI. The root [`.env.example`](.env.example) documents the values.
 
 For AI, open **Settings → AI**, select **Anthropic** or **OpenAI**, enter your API key, and choose **Save AI settings**. OpenAI defaults to `gpt-4.1-mini`; you can enter another text model ID available to your account. Each provider keeps its own encrypted key and model choice. Existing Anthropic settings continue to work. An OpenAI-only environment setup selects OpenAI automatically; with both keys present, Anthropic remains the default until you save a provider choice. Environment keys override saved keys and must be changed on the server. Saving settings does not make a model request or verify account access.
 
-Deploy anywhere a Node process and a persistent disk exist: Docker, Railway, Fly.io, a small VPS. Serverless platforms without a disk need an external database, which this release does not support. SQLite on disk is the point.
+Deploy on **Vercel** with a Turso database (see [Deploy on Vercel](#deploy-on-vercel)). Docker / local-volume SQLite is unsupported on this line of work.
 
 Optional historical market data powers estimated MAE/MFE and candle replay on closed trades, with Vela™ rendering the charts. Configure a connection or upload candle CSVs in **Settings → Market data**. No provider is enabled or selected by default. See [Market data and replay](#market-data-and-replay) below and the [market data guide](docs/market-data.md) for setup, calculation definitions, and coverage limits.
 
@@ -232,9 +249,9 @@ See [supported formats and validation status](docs/importers.md). Have an export
 
 **Settings → Data & backups → Full backup (JSON)** includes accounts (without credentials), executions, trades and annotations, daily journal entries, notebook folders and notes, templates, playbooks and rule checks, routines, missed trades, journal defaults, prop firm records and their audit history, and attachment metadata. Trades also export as CSV; review exports support PDF and PNG.
 
-JSON export excludes credentials, candle datasets, saved market-data estimates, and attachment binaries, and there is no general JSON restore importer in this release. For a complete local backup, stop the app and copy the entire data directory, including attachments and the hidden `.secret` file if generated. If you supply `JOURNAL_SECRET`, retain that value separately so encrypted credentials remain readable. Keep original candle CSVs as well.
+JSON export excludes credentials, candle datasets, saved market-data estimates, and attachment binaries, and there is no general JSON restore importer in this release. For a complete backup, export JSON from Settings and retain `JOURNAL_SECRET` (and Turso snapshots if you use Turso). Local `file:` databases also live under `JOURNAL_DATA_DIR` (default `apps/web/data/`); if you used a generated `.secret` file locally, keep that file with the data directory.
 
-Default locations: `apps/web/data/` for the pnpm commands above, or the host's `./data` bind mount for Docker. `JOURNAL_DATA_DIR` overrides the app's path.
+Default local file location: `apps/web/data/` for the pnpm commands above when `TURSO_DATABASE_URL` is unset. `JOURNAL_DATA_DIR` overrides the local `file:` path parent.
 
 ## Monorepo layout
 
@@ -242,7 +259,7 @@ Default locations: `apps/web/data/` for the pnpm commands above, or the host's `
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
 | [`packages/core`](packages/core)           | `@luxalgo/journal-core`: pure domain engine (round trips, metrics, calendar, Edge Score). No IO, no framework, fully unit-tested. |
 | [`packages/importers`](packages/importers) | `@luxalgo/journal-importers`: statement parsers + migration importers. Zero-dependency CSV/HTML parsing.                          |
-| [`apps/web`](apps/web)                     | The app: Next.js 15, SQLite (Drizzle), Tailwind, Recharts/ECharts, Vela charting, TanStack Table, ai-sdk.                         |
+| [`apps/web`](apps/web)                     | The app: Next.js 15, Turso/libSQL (Drizzle async), Tailwind, Recharts/ECharts, Vela charting, TanStack Table, ai-sdk. |
 
 ### Use the engine in your own app
 

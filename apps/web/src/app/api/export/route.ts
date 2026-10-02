@@ -32,6 +32,8 @@ import {
 import { handler, ok } from "@/server/api";
 import { attachmentExportRecord, EXPORT_ATTACHMENTS_NOTE } from "@/lib/export-format";
 
+export const maxDuration = 60;
+
 /**
  * Full data export: your journal is yours. Credentials are deliberately
  * excluded: an export must be safe to share or move between machines.
@@ -47,7 +49,7 @@ export const GET = handler(async (request: Request) => {
       const text = value === null || value === undefined ? "" : String(value);
       return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     };
-    const lines = queryTrades(readFilters(url.searchParams)).rows.map((row) =>
+    const lines = (await queryTrades(readFilters(url.searchParams))).rows.map((row) =>
       [
         row.key,
         row.accountId,
@@ -79,48 +81,48 @@ export const GET = handler(async (request: Request) => {
   return ok({
     exportedAt: new Date().toISOString(),
     note: EXPORT_ATTACHMENTS_NOTE,
-    accounts: db
+    accounts: (await db
       .select()
       .from(accounts)
-      .all()
-      .map(({ credentialsEnc: _omitted, ...safe }) => safe),
-    executions: db.select().from(executions).all(),
-    importSources: db.select().from(importSources).all(),
-    importSourceAliases: db.select().from(importSourceAliases).all(),
-    importBatches: db.select().from(importBatches).all(),
-    trades: db.select().from(trades).all(),
-    journalDays: db.select().from(journalDays).all(),
-    notes: db.select().from(notes).all(),
-    folders: db.select().from(folders).all(),
-    playbooks: db.select().from(playbooks).all(),
-    noteTemplates: db.select().from(noteTemplates).all(),
-    tradeRuleChecks: db.select().from(tradeRuleChecks).all(),
-    progressRules: db.select().from(progressRules).all(),
-    progressChecks: db.select().from(progressChecks).all(),
-    missedTrades: db.select().from(missedTrades).all(),
-    propAccounts: db.select().from(propAccounts).all(),
-    propEntries: db.select().from(propEntries).all(),
-    propReceipts: db.select().from(propReceipts).all(),
-    propAudit: db.select().from(propAudit).all(),
-    journalDefaults: getJournalDefaults(),
+      .all()).map(({ credentialsEnc: _omitted, ...safe }) => safe),
+    executions: await db.select().from(executions).all(),
+    importSources: await db.select().from(importSources).all(),
+    importSourceAliases: await db.select().from(importSourceAliases).all(),
+    importBatches: await db.select().from(importBatches).all(),
+    trades: await db.select().from(trades).all(),
+    journalDays: await db.select().from(journalDays).all(),
+    notes: await db.select().from(notes).all(),
+    folders: await db.select().from(folders).all(),
+    playbooks: await db.select().from(playbooks).all(),
+    noteTemplates: await db.select().from(noteTemplates).all(),
+    tradeRuleChecks: await db.select().from(tradeRuleChecks).all(),
+    progressRules: await db.select().from(progressRules).all(),
+    progressChecks: await db.select().from(progressChecks).all(),
+    missedTrades: await db.select().from(missedTrades).all(),
+    propAccounts: await db.select().from(propAccounts).all(),
+    propEntries: await db.select().from(propEntries).all(),
+    propReceipts: await db.select().from(propReceipts).all(),
+    propAudit: await db.select().from(propAudit).all(),
+    journalDefaults: await getJournalDefaults(),
     settings: {
-      timeZone: getTimeZone(),
-      importTimeZone: getImportTimeZone(),
-      multipliers: getMultipliers(),
+      timeZone: await getTimeZone(),
+      importTimeZone: await getImportTimeZone(),
+      multipliers: await getMultipliers(),
     },
     // Metadata only: attachment binaries stay in the data directory.
-    attachments: db
-      .select({
-        id: attachments.id,
-        ownerType: attachments.ownerType,
-        ownerId: attachments.ownerId,
-        name: attachments.name,
-        mime: attachments.mime,
-        size: attachments.size,
-        createdAt: attachments.createdAt,
-      })
-      .from(attachments)
-      .all()
-      .map(attachmentExportRecord),
+    attachments: (
+      await db
+        .select({
+          id: attachments.id,
+          ownerType: attachments.ownerType,
+          ownerId: attachments.ownerId,
+          name: attachments.name,
+          mime: attachments.mime,
+          size: attachments.size,
+          createdAt: attachments.createdAt,
+        })
+        .from(attachments)
+        .all()
+    ).map(attachmentExportRecord),
   });
 });

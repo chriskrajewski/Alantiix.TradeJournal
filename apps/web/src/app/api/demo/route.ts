@@ -6,4 +6,4 @@ import { loadDemoData } from "@/server/demo";
  * install has something to look at. Idempotent; delete the account in
  * Accounts to remove every trace.
  */
-export const POST = handler(() => ok(loadDemoData()));
+export const POST = handler(async () => ok(await loadDemoData()));

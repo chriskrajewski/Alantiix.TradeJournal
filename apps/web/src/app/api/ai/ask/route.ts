@@ -14,6 +14,8 @@ import { runAi } from "@/server/ai";
 import { queryTrades } from "@/server/trades-query";
 import { accountContext, readAiRequest } from "@/server/ai-scope";
 
+export const maxDuration = 60;
+
 const bucketBlock = (title: string, buckets: BucketStats[]): string =>
   buckets.length === 0
     ? ""
@@ -29,10 +31,10 @@ const bucketBlock = (title: string, buckets: BucketStats[]): string =>
  * own aggregates. The same questions an agent can ask through the MCP tools.
  */
 export const POST = handler(async (request: Request) => {
-  const scope = readAiRequest(await request.json(), "question");
+  const scope = await readAiRequest(await request.json(), "question");
   const { question, timeZone, filters } = scope;
 
-  const { trades } = queryTrades(filters);
+  const { trades } = await queryTrades(filters);
   if (trades.length === 0) return bad("No trades match the selected accounts and filters");
   const m = computeMetrics(trades, { timeZone });
 

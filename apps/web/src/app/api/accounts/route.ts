@@ -5,10 +5,10 @@ import { encryptJson } from "@/server/crypto";
 import { newId, nowIso } from "@/server/ids";
 import { syncAccount } from "@/server/sync";
 
-export const GET = handler((request: Request) => {
+export const GET = handler(async (request: Request) => {
   if (new URL(request.url).searchParams.get("summary") === "1") {
     return ok({
-      accounts: db
+      accounts: await db
         .select({
           id: accounts.id,
           name: accounts.name,
@@ -20,7 +20,7 @@ export const GET = handler((request: Request) => {
         .all(),
     });
   }
-  const rows = db.select().from(accounts).orderBy(asc(accounts.createdAt)).all();
+  const rows = await db.select().from(accounts).orderBy(asc(accounts.createdAt)).all();
   return ok({
     accounts: rows.map(({ credentialsEnc, ...safe }) => ({
       ...safe,
@@ -49,7 +49,7 @@ export const POST = handler(async (request: Request) => {
   }
 
   const id = newId();
-  db.insert(accounts)
+  await db.insert(accounts)
     .values({
       id,
       name: body.name,
@@ -71,7 +71,7 @@ export const POST = handler(async (request: Request) => {
       sync = await syncAccount(id);
     } catch (error) {
       // Bad credentials shouldn't strand a half-created account.
-      db.delete(accounts).where(eq(accounts.id, id)).run();
+      await db.delete(accounts).where(eq(accounts.id, id)).run();
       return bad(error instanceof Error ? error.message : "Broker connection failed", 502);
     }
   }

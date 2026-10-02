@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { ensureDb } from "@/db";
 import { AUTH_COOKIE, passwordConfigured, verifySession } from "./auth";
 
 export class RequestError extends Error {}
@@ -24,6 +25,7 @@ export const handler =
   ) =>
   async (...args: A): Promise<Response> => {
     try {
+      await ensureDb();
       if (!options.public && passwordConfigured()) {
         const token = (await cookies()).get(AUTH_COOKIE)?.value;
         if (!verifySession(token)) return bad("Unauthorized", 401);

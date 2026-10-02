@@ -6,13 +6,15 @@ import { runAi } from "@/server/ai";
 import { queryTrades } from "@/server/trades-query";
 import { accountContext, readAiRequest } from "@/server/ai-scope";
 
+export const maxDuration = 60;
+
 /** Generate a session recap for one trading day from the day's actual trades. */
 export const POST = handler(async (request: Request) => {
-  const scope = readAiRequest(await request.json(), "date");
+  const scope = await readAiRequest(await request.json(), "date");
   const { timeZone, filters } = scope;
   const date = scope.date!;
 
-  const { trades } = queryTrades(filters);
+  const { trades } = await queryTrades(filters);
   const dayTrades = trades.filter(
     (trade) => trade.closedAt && dayKeyOf(trade.closedAt, timeZone) === date,
   );
@@ -23,7 +25,7 @@ export const POST = handler(async (request: Request) => {
   // Day notes are shared across accounts and cannot be attributed to a filtered subset.
   const onlyDateFilters = Object.keys(filters).every((key) => key === "from" || key === "to");
   const existingNote = onlyDateFilters
-    ? db.select().from(journalDays).where(eq(journalDays.date, date)).get()?.note
+    ? (await db.select().from(journalDays).where(eq(journalDays.date, date)).get())?.note
     : undefined;
 
   const tradeLines = dayTrades

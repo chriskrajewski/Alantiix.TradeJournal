@@ -2,7 +2,9 @@ import { bad, handler, ok, requireValue } from "@/server/api";
 import { csvDatasets, importCsvDataset, removeCsvDataset } from "@/server/market-data/csv";
 import { MAX_CSV_BYTES, parseMarketCsv } from "@/lib/market-csv";
 import { isResolution, RESOLUTIONS, type Resolution } from "@/lib/market-data";
-export const GET = handler(() => ok({ datasets: csvDatasets() }));
+export const maxDuration = 60;
+
+export const GET = handler(async () => ok({ datasets: await csvDatasets() }));
 export const POST = handler(async (request: Request) => {
   const reader = request.body?.getReader();
   requireValue(reader, "Provide a market CSV request.");
@@ -30,8 +32,8 @@ export const POST = handler(async (request: Request) => {
   );
   if (body.action === "remove") {
     requireValue(typeof body.id === "string" && body.id.length <= 80, "Choose a dataset.");
-    removeCsvDataset(body.id);
-    return ok({ datasets: csvDatasets() });
+    await removeCsvDataset(body.id);
+    return ok({ datasets: await csvDatasets() });
   }
   requireValue(typeof body.content === "string", "Choose a CSV file.");
   requireValue(
@@ -53,7 +55,7 @@ export const POST = handler(async (request: Request) => {
   );
   try {
     if (body.action === "import")
-      return ok({ id: importCsvDataset(body), datasets: csvDatasets() });
+      return ok({ id: await importCsvDataset(body), datasets: await csvDatasets() });
     const bars = parseMarketCsv(body.content, body.symbol, body.resolution);
     return ok({
       count: bars.length,
