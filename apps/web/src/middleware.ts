@@ -7,7 +7,8 @@ import { NextResponse, type NextRequest } from "next/server";
  * handlers gate data.
  */
 export const middleware = (request: NextRequest) => {
-  if (!process.env.JOURNAL_PASSWORD) return NextResponse.next();
+  // Match server auth: treat whitespace-only env as unset (common Vercel paste quirk).
+  if (!(process.env.JOURNAL_PASSWORD ?? "").trim()) return NextResponse.next();
   const { pathname } = request.nextUrl;
   if (pathname === "/login" || pathname === "/api/auth") return NextResponse.next();
   const cookie = request.cookies.get("journal_session")?.value;

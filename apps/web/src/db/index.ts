@@ -64,14 +64,19 @@ const applyAdditiveMigrations = async (client: Client): Promise<void> => {
     last_time = json_extract(bars_json, '$[#-1].time') WHERE bar_count = 0`);
 };
 
-const bootstrap = async (client: Client): Promise<void> => {
-  await client.execute("PRAGMA foreign_keys = ON");
-  await client.execute("PRAGMA busy_timeout = 5000");
+/** Local file DBs accept these; remote Turso rejects several PRAGMAs (e.g. busy_timeout). */
+const tryPragma = async (client: Client, sql: string): Promise<void> => {
   try {
-    await client.execute("PRAGMA journal_mode = WAL");
+    await client.execute(sql);
   } catch {
-    // Remote Turso may ignore or reject WAL; continue with bootstrap.
+    // Remote libSQL / Turso may reject or ignore connection-local PRAGMAs.
   }
+};
+
+const bootstrap = async (client: Client): Promise<void> => {
+  await tryPragma(client, "PRAGMA foreign_keys = ON");
+  await tryPragma(client, "PRAGMA busy_timeout = 5000");
+  await tryPragma(client, "PRAGMA journal_mode = WAL");
   await client.executeMultiple(BOOTSTRAP_SQL);
   await applyAdditiveMigrations(client);
 };

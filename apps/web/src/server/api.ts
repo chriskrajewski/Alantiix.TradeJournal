@@ -25,10 +25,14 @@ export const handler =
   ) =>
   async (...args: A): Promise<Response> => {
     try {
-      await ensureDb();
-      if (!options.public && passwordConfigured()) {
-        const token = (await cookies()).get(AUTH_COOKIE)?.value;
-        if (!verifySession(token)) return bad("Unauthorized", 401);
+      // Public routes (login) must not depend on DB bootstrap — a Turso/PRAGMA
+      // failure would otherwise surface before password verification.
+      if (!options.public) {
+        await ensureDb();
+        if (passwordConfigured()) {
+          const token = (await cookies()).get(AUTH_COOKIE)?.value;
+          if (!verifySession(token)) return bad("Unauthorized", 401);
+        }
       }
       return await fn(...args);
     } catch (error) {
