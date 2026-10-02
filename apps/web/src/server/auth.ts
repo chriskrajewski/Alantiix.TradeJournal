@@ -7,17 +7,25 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  */
 export const AUTH_COOKIE = "journal_session";
 
-export const passwordConfigured = (): boolean => Boolean(process.env.JOURNAL_PASSWORD);
+/** Trim env value so accidental whitespace/newlines in Vercel dashboard paste still match. */
+const configuredPassword = (): string => (process.env.JOURNAL_PASSWORD ?? "").trim();
+
+export const passwordConfigured = (): boolean => Boolean(configuredPassword());
 
 export const sessionToken = (): string =>
-  createHmac("sha256", process.env.JOURNAL_PASSWORD ?? "")
-    .update("session-v1")
-    .digest("hex");
+  createHmac("sha256", configuredPassword()).update("session-v1").digest("hex");
 
 export const verifyPassword = (candidate: string): boolean => {
-  const expected = Buffer.from(process.env.JOURNAL_PASSWORD ?? "", "utf8");
+  const expected = Buffer.from(configuredPassword(), "utf8");
   const given = Buffer.from(candidate, "utf8");
-  return expected.length === given.length && timingSafeEqual(expected, given);
+  if (expected.length === given.length && timingSafeEqual(expected, given)) return true;
+  // Accept a trimmed candidate so accidental spaces around typed input still match.
+  const trimmed = candidate.trim();
+  if (trimmed === candidate) return false;
+  const trimmedGiven = Buffer.from(trimmed, "utf8");
+  return (
+    expected.length === trimmedGiven.length && timingSafeEqual(expected, trimmedGiven)
+  );
 };
 
 export const verifySession = (token: string | undefined): boolean => {

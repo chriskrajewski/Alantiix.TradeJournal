@@ -15,12 +15,15 @@ export default function LoginPage() {
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    setError(null);
     try {
       await postJson("/api/auth", { password });
       router.push("/");
       router.refresh();
-    } catch {
-      setError("Wrong password");
+    } catch (cause) {
+      // Do not collapse DB/config failures into "Wrong password" — login used to
+      // hide Turso bootstrap errors behind that message.
+      setError(cause instanceof Error ? cause.message : "Sign-in failed");
     }
   };
 

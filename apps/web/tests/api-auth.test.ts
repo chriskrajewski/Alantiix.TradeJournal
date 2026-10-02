@@ -38,4 +38,10 @@ describe("optional journal password protection", () => {
     expect(verifyPassword("wrong-password")).toBe(false);
     expect((await handler(() => ok({ login: true }), { public: true })()).status).toBe(200);
   });
+
+  it("trims JOURNAL_PASSWORD from the environment so Vercel paste newlines still match", () => {
+    vi.stubEnv("JOURNAL_PASSWORD", "test-password\n");
+    expect(verifyPassword("test-password")).toBe(true);
+    expect(verifyPassword("test-password\n")).toBe(true);
+  });
 });
